@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { createWorld } from './world.js';
+import { prewarmBuildingTextures } from './buildings.js';
 import { createJohn } from './john.js';
 import {
-  FIELD_COLUMNS, FIELD_ROWS, COVERAGE_TARGET, PRICES, newFarm, loadFarm, saveFarm,
-  dateLabel, phaseLabel, coveragePercent, clearAccess, sampleSoil,
-  acquireTractor, buySupply, rentTool, workCell, advanceToNextEvent,
+  PRICES, newFarm, loadFarm, saveFarm,
+  dateLabel, phaseLabel, coveragePercent, clearAccess, sampleSoil, sendSoilSample, readSoilReport,
+  acquireTractor, buySupply, rentTool, workFieldSwath, advanceToNextEvent,
   decideFertilizer, helpNeighbor,
 } from './farming.js';
+import { FIELD_BOUNDS, WORK_COLUMNS, WORK_ROWS, workedAt } from './fieldwork.js';
+import { advanceClock, timeLabel, weatherForDay } from './weather.js';
 import './fonts.css';
 import './style.css';
 
@@ -59,6 +62,15 @@ try {
   let saveTimer = 0;
   let toastTimer = 0;
   let sprintToggled = false;
+  let lastSwath = null;
+  let fieldSyncTimer = 0;
+  let fieldDirty = false;
+  let clockHudTimer = 0;
+  let fieldMapKey = '';
+  const fieldMapLayer = document.createElement('canvas');
+  fieldMapLayer.width = WORK_COLUMNS;
+  fieldMapLayer.height = WORK_ROWS;
+  const fieldMapContext = fieldMapLayer.getContext('2d');
   const target = new THREE.Vector3();
   const desired = new THREE.Vector3();
   const joystick = $('#joystick');
@@ -108,8 +120,9 @@ try {
     const tractor = farm.tractorOwned || farm.tractorRented;
     switch (farm.phase) {
       case 'clear': return 'Cut the brambles blocking the field gate.';
-      case 'test': return `Take a soil sample at the gate · ◈ ${PRICES.soilTest}`;
-      case 'test_pending': return 'Collect the soil report at the farmhouse.';
+      case 'test': return 'Take a soil sample at the cleared gate.';
+      case 'test_collected': return `Drop the sample at village supplies · ◈ ${PRICES.soilTest}`;
+      case 'test_pending': return farm.day >= farm.soilReportDay ? 'Read the delivered soil report at the farmhouse.' : 'The sample is at the laboratory. Work or check the farmhouse calendar.';
       case 'mow': return !tractor ? 'Rent or buy a tractor at the shed.' : !farm.tool ? 'Rent a mower at the shed.' : 'Drive the mower through the field.';
       case 'lime': return !farm.limeBought ? 'Buy lime at the shop or shed.' : !farm.tool ? 'Rent a spreader at the shed.' : 'Spread lime across the field.';
       case 'cultivate': return !farm.tool ? 'Rent a cultivator at the shed.' : 'Cultivate the field.';
@@ -125,6 +138,11 @@ try {
 
   function renderHud() {
     $('#date').textContent = dateLabel(farm.day).toUpperCase();
+    const weather = weatherForDay(farm.day);
+    $('#time-label').textContent = timeLabel(farm.timeOfDay);
+    $('#weather-icon').textContent = weather.icon;
+    $('#weather-name').textContent = weather.name;
+    $('#time-weather').title = weather.name;
     $('#coins').textContent = farm.coins.toLocaleString();
     $('#phase').textContent = phaseLabel(farm);
     $('#objective').textContent = objective();
@@ -132,7 +150,7 @@ try {
     const percent = fieldWork ? coveragePercent(farm) : farm.phase === 'clear' ? farm.accessCleared / 2 * 100 :
       ['growing', 'spring_care'].includes(farm.phase) ? (farm.growthEvent + 1) / 5 * 100 :
       farm.phase === 'harvested' ? 100 : 0;
-    $('#progress').textContent = fieldWork ? `${Math.min(COVERAGE_TARGET, farm.coverage.filter(Boolean).length)} / ${COVERAGE_TARGET}` :
+    $('#progress').textContent = fieldWork ? `${coveragePercent(farm)}%` :
       farm.phase === 'clear' ? `${farm.accessCleared} / 2` :
       ['growing', 'spring_care'].includes(farm.phase) ? `${Math.max(0, farm.growthEvent + 1)} / 5` : '';
     $('#progress-fill').style.width = `${percent}%`;
@@ -174,15 +192,24 @@ try {
     $('#panel-kicker').textContent = `${dateLabel(farm.day)} · ◈ ${farm.coins.toLocaleString()}`;
     if (kind === 'farmhouse') {
       $('#panel-title').textContent = 'Farmhouse';
+      if (farm.timeOfDay >= 19 || farm.timeOfDay < 6) addOption('Sleep until morning', 'The farm day resumes at 07:00.', () => {
+        if (farm.timeOfDay >= 19) farm.day++;
+        farm.timeOfDay = 7;
+        sync('A new morning on the farm.');
+      });
       if (farm.phase === 'spring_care') {
         addOption(`Apply spring fertilizer · ◈ ${PRICES.springFertilizer}`, 'Improves grain yield at harvest.', () => perform(() => decideFertilizer(farm, true), 'Fertilizer applied. Spring growth continues.'), farm.coins < PRICES.springFertilizer);
         addOption('Leave the crop untreated', 'The wheat continues growing with a smaller yield.', () => perform(() => decideFertilizer(farm, false), 'The wheat continues growing.'));
       } else if (['test_pending', 'ready_to_sow', 'growing', 'harvested'].includes(farm.phase)) {
-        const label = farm.phase === 'test_pending' ? 'Read soil report' : farm.phase === 'ready_to_sow' ? 'Advance to sowing window' : farm.phase === 'harvested' ? 'Begin next farm year' : 'Advance to next event';
-        addOption(label, farm.phase === 'harvested' ? 'Keep your coins and any tractor you bought.' : 'The calendar moves past quiet days.', () => {
-          const message = advanceToNextEvent(farm);
-          if (message) sync(message);
-        });
+        if (farm.phase === 'test_pending' && farm.day >= farm.soilReportDay) {
+          addOption('Read delivered soil report', 'Lab finding: pH 5.8. The field needs lime.', () => perform(() => readSoilReport(farm), 'Soil report: pH 5.8. Mow before spreading lime.'));
+        } else {
+          const label = farm.phase === 'test_pending' ? `Advance to lab delivery · ${Math.max(1, farm.soilReportDay - farm.day)} days` : farm.phase === 'ready_to_sow' ? 'Advance to sowing window' : farm.phase === 'harvested' ? 'Begin next farm year' : 'Advance to next event';
+          addOption(label, farm.phase === 'harvested' ? 'Keep your coins and any tractor you bought.' : 'The calendar moves past quiet days.', () => {
+            const message = advanceToNextEvent(farm);
+            if (message) sync(message);
+          });
+        }
       } else {
         addOption(phaseLabel(farm), objective(), () => closePanel(), true);
       }
@@ -208,6 +235,7 @@ try {
       }
     } else if (kind === 'shop') {
       $('#panel-title').textContent = 'Village supplies';
+      if (farm.phase === 'test_collected') addOption(`Send soil sample · ◈ ${PRICES.soilTest}`, 'The laboratory report is delivered to the farmhouse in two days.', () => perform(() => sendSoilSample(farm), 'Sample handed over. The lab will send its report in two days.'), farm.coins < PRICES.soilTest);
       addOption(farm.limeBought ? 'Lime purchased' : `Buy lime · ◈ ${PRICES.lime}`, 'Ground limestone for the field.', () => perform(() => buySupply(farm, 'lime'), 'Lime purchased.'), farm.limeBought || farm.coins < PRICES.lime);
       addOption(farm.wheatSeedBought ? 'Winter wheat purchased' : `Buy winter wheat seed · ◈ ${PRICES.wheatSeed}`, 'Seed for September drilling.', () => perform(() => buySupply(farm, 'wheatSeed'), 'Winter wheat seed purchased.'), farm.wheatSeedBought || farm.coins < PRICES.wheatSeed);
     } else if (kind === 'reset') {
@@ -240,13 +268,15 @@ try {
   function nearbyAction() {
     if (world.vehicles.driven) return { label: 'Exit vehicle', run: () => {
       world.vehicles.exit(john.group.position);
+      lastSwath = null;
+      if (fieldDirty) { fieldDirty = false; world.fieldVisual.sync(farm); renderHud(); }
       john.group.visible = true;
       renderHud();
     } };
     const player = john.group.position;
     if (Math.hypot(player.x + 55, player.z - 105) < 10) {
       if (farm.phase === 'clear') return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Soil is accessible.' : 'One patch cleared.') };
-      if (farm.phase === 'test') return { label: `Test soil · ◈ ${PRICES.soilTest}`, run: () => perform(() => sampleSoil(farm), 'Soil sample sent. Check the farmhouse report.') };
+      if (farm.phase === 'test') return { label: 'Collect soil sample', run: () => perform(() => sampleSoil(farm), 'Sample collected. Take it to village supplies for laboratory testing.') };
     }
     const vehicle = world.vehicles.near(player);
     if (vehicle) return { label: vehicle === world.vehicles.tractor ? 'Drive tractor' : 'Drive combine', run: () => {
@@ -350,25 +380,28 @@ try {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  function workField(vehicle) {
-    if (!farm.tool || farm.tool !== farm.phase || Math.abs(vehicle.speed) < 1.5) return;
-    if ((farm.phase === 'harvest') !== (vehicle.kind === 'combine')) return;
-    const { minX, maxX, minZ, maxZ } = world.field;
-    const width = (maxX - minX) / FIELD_COLUMNS;
-    const depth = (maxZ - minZ) / FIELD_ROWS;
-    let changed = false;
-    let completion = null;
-    for (let row = 0; row < FIELD_ROWS && !completion; row++) {
-      for (let column = 0; column < FIELD_COLUMNS; column++) {
-        const x = minX + (column + 0.5) * width;
-        const z = minZ + (row + 0.5) * depth;
-        if (Math.abs(x - vehicle.x) > 23 || Math.abs(z - vehicle.z) > 16) continue;
-        const outcome = workCell(farm, row * FIELD_COLUMNS + column);
-        changed ||= outcome.changed;
-        if (outcome.completed) { completion = outcome; break; }
-      }
-    }
-    if (completion) {
+  function workField(vehicle, delta) {
+    const flushField = () => {
+      if (!fieldDirty) return;
+      fieldSyncTimer += delta;
+      if (fieldSyncTimer < 0.11) return;
+      fieldSyncTimer = 0;
+      fieldDirty = false;
+      world.fieldVisual.sync(farm);
+      renderHud();
+    };
+    if (!vehicle || !farm.tool || farm.tool !== farm.phase || Math.abs(vehicle.speed) < 1.5 ||
+      (farm.phase === 'harvest') !== (vehicle.kind === 'combine')) { lastSwath = null; flushField(); return; }
+    const width = { mow: 5.8, lime: 8.2, cultivate: 5.4, sow: 5.4, harvest: 6.6 }[farm.phase];
+    const offset = farm.phase === 'harvest' ? -2.7 : 3.5;
+    const x = vehicle.x + Math.sin(vehicle.heading) * offset;
+    const z = vehicle.z + Math.cos(vehicle.heading) * offset;
+    const previous = lastSwath?.phase === farm.phase && Math.hypot(x - lastSwath.x, z - lastSwath.z) < 8 ? lastSwath : { x, z };
+    lastSwath = { x, z, phase: farm.phase };
+    const completion = workFieldSwath(farm, previous.x, previous.z, x, z, width);
+    if (completion.completed) {
+      lastSwath = null;
+      fieldDirty = false;
       const messages = {
         mow: 'Weeds mown. The soil needs lime.',
         lime: 'Lime spread. Cultivate the field next.',
@@ -377,7 +410,43 @@ try {
         harvest: `Harvest sold · +◈ ${farm.lastYield.toLocaleString()}.`,
       };
       sync(messages[completion.previous]);
-    } else if (changed) sync();
+    } else {
+      fieldDirty ||= completion.changed;
+      flushField();
+    }
+  }
+
+  function refreshFieldMap() {
+    const key = `${farm.phase}|${farm.growthEvent}|${farm.workRevision}`;
+    if (key === fieldMapKey) return;
+    fieldMapKey = key;
+    const image = fieldMapContext.createImageData(WORK_COLUMNS, WORK_ROWS);
+    const colors = {
+      overgrown: [79, 106, 57], mown: [128, 139, 84], limed: [153, 151, 117],
+      cultivated: [102, 79, 59], seeded: [91, 72, 54], growing: [112, 145, 67],
+      ripe: [188, 155, 79], harvested: [137, 111, 69],
+    };
+    for (let row = 0; row < WORK_ROWS; row++) for (let column = 0; column < WORK_COLUMNS; column++) {
+      const worked = workedAt(farm, FIELD_BOUNDS.minX + column + 0.5, FIELD_BOUNDS.minZ + row + 0.5);
+      const stage = farm.phase;
+      let surface = 'overgrown';
+      if (stage === 'mow') surface = worked ? 'mown' : 'overgrown';
+      else if (stage === 'lime') surface = worked ? 'limed' : 'mown';
+      else if (stage === 'cultivate') surface = worked ? 'cultivated' : 'limed';
+      else if (stage === 'ready_to_sow') surface = 'cultivated';
+      else if (stage === 'sow') surface = worked ? 'seeded' : 'cultivated';
+      else if (stage === 'growing' || stage === 'spring_care') surface = farm.growthEvent >= 3 ? 'ripe' : 'growing';
+      else if (stage === 'harvest') surface = worked ? 'harvested' : 'ripe';
+      else if (stage === 'harvested') surface = 'harvested';
+      const index = (row * WORK_COLUMNS + column) * 4;
+      const color = colors[surface];
+      const variation = (column * 13 + row * 17) % 11 - 5;
+      image.data[index] = color[0] + variation;
+      image.data[index + 1] = color[1] + variation;
+      image.data[index + 2] = color[2] + variation;
+      image.data[index + 3] = 255;
+    }
+    fieldMapContext.putImageData(image, 0, 0);
   }
 
   function drawMap(subject) {
@@ -388,40 +457,9 @@ try {
     context.clearRect(0, 0, 180, 180);
     context.fillStyle = '#1b3025'; context.fillRect(0, 0, 180, 180);
     const { minX, maxX, minZ, maxZ } = world.field;
-    const cellWidth = (maxX - minX) / FIELD_COLUMNS;
-    const cellDepth = (maxZ - minZ) / FIELD_ROWS;
-    const colors = {
-      overgrown: '#526c3d', mown: '#8b945a', limed: '#b5b296', cultivated: '#6c5742',
-      seeded: '#645344', growing: '#78914d', ripe: '#c6a85b', harvested: '#987a50',
-    };
     const stage = farm.phase;
-    for (let row = 0; row < FIELD_ROWS; row++) for (let column = 0; column < FIELD_COLUMNS; column++) {
-      const index = row * FIELD_COLUMNS + column;
-      const worked = !!farm.coverage[index];
-      let surface = 'overgrown';
-      if (stage === 'mow') surface = worked ? 'mown' : 'overgrown';
-      else if (stage === 'lime') surface = worked ? 'limed' : 'mown';
-      else if (stage === 'cultivate') surface = worked ? 'cultivated' : 'limed';
-      else if (stage === 'ready_to_sow') surface = 'cultivated';
-      else if (stage === 'sow') surface = worked ? 'seeded' : 'cultivated';
-      else if (stage === 'growing' || stage === 'spring_care') surface = farm.growthEvent >= 3 ? 'ripe' : 'growing';
-      else if (stage === 'harvest') surface = worked ? 'harvested' : 'ripe';
-      else if (stage === 'harvested') surface = 'harvested';
-      const x = px(minX + column * cellWidth), z = pz(minZ + row * cellDepth);
-      const w = cellWidth * scale + 0.4, d = cellDepth * scale + 0.4;
-      context.fillStyle = colors[surface];
-      context.fillRect(x, z, w, d);
-      if (surface === 'overgrown') {
-        context.fillStyle = '#a1a77070';
-        context.fillRect(x + (index % 3) * 2 + 2, z + (index % 4) * 2 + 2, 2, 2);
-      } else if (surface === 'cultivated' || surface === 'seeded' || surface === 'harvested') {
-        context.strokeStyle = surface === 'seeded' ? '#b99d7280' : '#312b2055';
-        context.lineWidth = 0.6;
-        for (let offset = 2; offset < w; offset += 3) {
-          context.beginPath(); context.moveTo(x + offset, z); context.lineTo(x + offset, z + d); context.stroke();
-        }
-      }
-    }
+    refreshFieldMap();
+    context.drawImage(fieldMapLayer, px(minX), pz(minZ), (maxX - minX) * scale, (maxZ - minZ) * scale);
     if (['clear', 'test', 'test_pending', 'mow'].includes(stage)) {
       for (let patch = 0; patch < farm.accessCleared; patch++) {
         context.fillStyle = '#c7ba7b';
@@ -446,6 +484,7 @@ try {
       context.beginPath(); context.arc(px(vehicle.group.position.x), pz(vehicle.group.position.z), 3.5, 0, Math.PI * 2); context.fill();
     }
     const destination = ['clear', 'test'].includes(farm.phase) ? { x: -55, z: 105 } :
+      farm.phase === 'test_collected' ? { x: -42, z: -265 } :
       ['test_pending', 'ready_to_sow', 'growing', 'spring_care', 'harvested'].includes(farm.phase) ? { x: 38, z: 201 } :
       !farm.tool ? { x: -41, z: 198 } : { x: 30, z: 20 };
     const markerX = THREE.MathUtils.clamp(px(destination.x), 9, 171);
@@ -466,6 +505,13 @@ try {
     requestAnimationFrame(frame);
     const delta = Math.min(clock.getDelta(), 0.05);
     elapsed += delta;
+    const newDay = advanceClock(farm, delta);
+    clockHudTimer += delta;
+    if (newDay || clockHudTimer > 1) {
+      clockHudTimer = 0;
+      renderHud();
+      if (newDay && panelKind) renderPanel();
+    }
     const forwardInput = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) + touchMove.y;
     const rightInput = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) + touchMove.x;
     let subject = john.group.position;
@@ -473,7 +519,7 @@ try {
     let distance = cameraDistance;
     if (world.vehicles.driven) {
       const vehicle = world.vehicles.update(delta, { forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1), right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1) }, world.collides);
-      workField(vehicle);
+      workField(vehicle, delta);
       if (world.vehicles.driven && vehicle) {
         subject = world.vehicles.activeGroup.position;
         subjectHeight = vehicle.kind === 'combine' ? 3.1 : 2.1;
@@ -518,6 +564,7 @@ try {
       }
     }
     world.buildings.update(subject);
+    world.atmosphere.update(farm, delta, subject);
     target.lerp(desired.set(subject.x, subject.y + subjectHeight, subject.z), 1 - Math.exp(-delta * 7));
     const horizontal = distance * Math.cos(cameraPitch);
     desired.set(target.x + Math.sin(cameraYaw) * horizontal, target.y + distance * Math.sin(cameraPitch), target.z + Math.cos(cameraYaw) * horizontal);
@@ -544,8 +591,10 @@ try {
 
   renderHud();
   const clock = new THREE.Clock();
+  const shadersReady = renderer.compileAsync(scene, camera).catch(cause => console.warn('Shader precompile unavailable', cause));
+  const texturesReady = prewarmBuildingTextures(renderer).catch(cause => console.warn('Building texture prewarm unavailable', cause));
   frame();
-  john.ready.then(() => {
+  Promise.all([john.ready, shadersReady, texturesReady]).then(() => {
     loading.classList.add('done');
     setTimeout(() => loading.remove(), 700);
   });

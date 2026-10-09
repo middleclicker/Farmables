@@ -91,11 +91,21 @@ export function createJohn(scene) {
       const walk = gltf.animations.find(clip => clip.name.toLowerCase().includes('walk'));
       const run = gltf.animations.find(clip => clip.name.toLowerCase().includes('run'));
       if (walk) {
-        // The rig's rest pose holds both arms out. Use an actual posed frame for idle.
-        const poseTime = walk.duration * 0.18;
-        const tracks = walk.tracks.map(track => new track.constructor(
-          track.name, [0], Array.from(track.createInterpolant().evaluate(poseTime)), track.getInterpolation(),
-        ));
+        // Blend opposing gait frames into a balanced, planted standing pose.
+        // The model's unanimated bind pose has its arms held straight out.
+        const tracks = walk.tracks.map(track => {
+          const interpolant = track.createInterpolant();
+          const first = Array.from(interpolant.evaluate(walk.duration * 0.14));
+          const opposite = Array.from(interpolant.evaluate(walk.duration * 0.64));
+          let values;
+          if (track.name.endsWith('.quaternion')) {
+            const a = new THREE.Quaternion(...first);
+            const b = new THREE.Quaternion(...opposite);
+            a.slerp(b, 0.5);
+            values = a.toArray();
+          } else values = first.map((value, index) => (value + opposite[index]) * 0.5);
+          return new track.constructor(track.name, [0], values, track.getInterpolation());
+        });
         idleAction = mixer.clipAction(new THREE.AnimationClip('standing', 1, tracks));
         idleAction.play();
         idleAction.setEffectiveWeight(1);
@@ -123,10 +133,10 @@ export function createJohn(scene) {
       if (mixer) {
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));
         const running = speed > 4.5 && !!runAction;
-        const smoothing = 1 - Math.exp(-delta * 10);
-        idleWeight += ((speed < 0.1 ? 1 : 0.12) - idleWeight) * smoothing;
-        walkWeight += ((speed >= 0.1 && !running ? 0.88 : 0) - walkWeight) * smoothing;
-        runWeight += ((speed >= 0.1 && running ? 0.88 : 0) - runWeight) * smoothing;
+        const smoothing = 1 - Math.exp(-delta * (speed < 0.1 ? 17 : 11));
+        idleWeight += ((speed < 0.1 ? 1 : 0.08) - idleWeight) * smoothing;
+        walkWeight += ((speed >= 0.1 && !running ? 0.92 : 0) - walkWeight) * smoothing;
+        runWeight += ((speed >= 0.1 && running ? 0.92 : 0) - runWeight) * smoothing;
         idleAction?.setEffectiveWeight(idleWeight);
         walkAction?.setEffectiveWeight(walkWeight);
         runAction?.setEffectiveWeight(runWeight);

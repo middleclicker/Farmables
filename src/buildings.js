@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import stoneDiff from '../assets/materials/plaster_stone_wall_02_diff.webp';
 import stoneNormal from '../assets/materials/plaster_stone_wall_02_normal.webp';
 import plasterDiff from '../assets/materials/rough_plaster_03_diff.webp';
@@ -17,14 +18,26 @@ import woodDiff from '../assets/materials/wood_plank_wall_diff.webp';
 import woodNormal from '../assets/materials/wood_plank_wall_normal.webp';
 
 const textureLoader = new THREE.TextureLoader();
+const textureCache = new Map();
+const textureReady = [];
+function buildingTexture(url, color) {
+  if (textureCache.has(url)) return textureCache.get(url);
+  let markReady;
+  textureReady.push(new Promise(resolve => { markReady = resolve; }));
+  const texture = textureLoader.load(url, markReady, undefined, markReady);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+  if (color) texture.colorSpace = THREE.SRGBColorSpace;
+  textureCache.set(url, texture);
+  return texture;
+}
+export async function prewarmBuildingTextures(renderer) {
+  await Promise.all(textureReady);
+  for (const texture of textureCache.values()) if (texture.image?.width) renderer.initTexture(texture);
+}
 function mapped(diffuse, normal, tint = 0xffffff, side = THREE.FrontSide) {
-  const map = textureLoader.load(diffuse);
-  const normalMap = textureLoader.load(normal);
-  for (const texture of [map, normalMap]) {
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.anisotropy = 4;
-  }
-  map.colorSpace = THREE.SRGBColorSpace;
+  const map = buildingTexture(diffuse, true);
+  const normalMap = buildingTexture(normal, false);
   return new THREE.MeshStandardMaterial({ map, normalMap, normalScale: new THREE.Vector2(0.48, 0.48), color: tint, roughness: 0.95, side });
 }
 
@@ -66,6 +79,31 @@ function box(group, w, h, d, x, y, z, material, shadows = true) {
   mesh.receiveShadow = true;
   group.add(mesh);
   return mesh;
+}
+
+function batchBuildingBoxes(group) {
+  const batches = new Map();
+  for (const mesh of group.children) {
+    if (!mesh.isMesh || mesh.children.length || mesh.geometry.type !== 'BoxGeometry' || mesh.material.transparent) continue;
+    const key = `${mesh.material.uuid}|${mesh.castShadow}|${mesh.receiveShadow}`;
+    if (!batches.has(key)) batches.set(key, []);
+    batches.get(key).push(mesh);
+  }
+  for (const meshes of batches.values()) {
+    if (meshes.length < 3) continue;
+    const geometries = meshes.map(mesh => {
+      mesh.updateMatrix();
+      return mesh.geometry.clone().applyMatrix4(mesh.matrix);
+    });
+    const geometry = mergeGeometries(geometries, false);
+    geometries.forEach(item => item.dispose());
+    if (!geometry) continue;
+    const merged = new THREE.Mesh(geometry, meshes[0].material);
+    merged.castShadow = meshes[0].castShadow;
+    merged.receiveShadow = meshes[0].receiveShadow;
+    meshes.forEach(mesh => group.remove(mesh));
+    group.add(merged);
+  }
 }
 
 function roof(group, width, depth, baseHeight, rise, material) {
@@ -374,13 +412,9 @@ function building(scene, groundHeight, options) {
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshStandardMaterial({ color: 0xf6dfac, emissive: 0xffd99d, emissiveIntensity: 1.5 }));
   bulb.position.set(0, h - 0.65, 0);
   group.add(bulb);
-  const interiorLight = new THREE.PointLight(0xffe9cf, kind === 'shed' ? 150 : 95, Math.max(w, d) * 1.4, 2);
-  interiorLight.position.set(0, h - 1.2, 0);
-  interiorLight.visible = false;
-  group.add(interiorLight);
-
+  batchBuildingBoxes(group);
   return {
-    id, kind, x, z, width: w, depth: d, height: h, baseY: group.position.y, roof: roofGroup, interiorLight, collision,
+    id, kind, x, z, width: w, depth: d, height: h, baseY: group.position.y, roof: roofGroup, collision,
     door: { x, z: z + frontZ + doorSide * 2.2 },
     interact: { x, z: z - doorSide * Math.min(3, d / 3) },
     contains(px, pz) { return Math.abs(px - x) < w / 2 - 0.35 && Math.abs(pz - z) < d / 2 - 0.35; },
@@ -389,12 +423,24 @@ function building(scene, groundHeight, options) {
 
 export function createBuildings(scene, heightAt) {
   const buildings = BUILDING_SITES.map(definition => building(scene, heightAt, definition));
+  // One always-present light avoids compiling a different material/light
+  // combination the first time John approaches each furnished interior.
+  const interiorLight = new THREE.PointLight(0xffe9cf, 0, 31, 2);
+  scene.add(interiorLight);
   return {
     list: buildings,
-    update(player) { buildings.forEach(item => {
-      item.roof.visible = !item.contains(player.x, player.z);
-      item.interiorLight.visible = Math.hypot(player.x - item.x, player.z - item.z) < 34;
-    }); },
+    update(player) {
+      let closest = null, distance = Infinity;
+      buildings.forEach(item => {
+        item.roof.visible = !item.contains(player.x, player.z);
+        const candidate = Math.hypot(player.x - item.x, player.z - item.z);
+        if (candidate < distance) { closest = item; distance = candidate; }
+      });
+      if (closest) {
+        interiorLight.position.set(closest.x, closest.baseY + closest.height - 1.2, closest.z);
+        interiorLight.intensity = (closest.kind === 'shed' ? 105 : 78) * (1 - THREE.MathUtils.smoothstep(distance, 19, 36));
+      }
+    },
     inside(player) { return buildings.find(item => item.contains(player.x, player.z)) || null; },
     collides(x, z, radius = 0.42) {
       return buildings.some(item => item.collision.some(wall => x + radius > wall.minX && x - radius < wall.maxX && z + radius > wall.minZ && z - radius < wall.maxZ));

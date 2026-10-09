@@ -1,7 +1,9 @@
+import { FIELD_BOUNDS, WORK_TARGET, exportWorkMask, paintSwath, resetWork, workPercent } from './fieldwork.js';
+
 export const FIELD_COLUMNS = 9;
 export const FIELD_ROWS = 15;
 export const FIELD_CELLS = FIELD_COLUMNS * FIELD_ROWS;
-export const COVERAGE_TARGET = FIELD_CELLS;
+export const COVERAGE_TARGET = WORK_TARGET;
 
 export const PRICES = Object.freeze({
   soilTest: 35,
@@ -18,13 +20,15 @@ export const PRICES = Object.freeze({
 });
 
 const START = Date.UTC(2026, 7, 20);
+const DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 const EVENT_DAYS = [36, 102, 207, 281, 339];
 const FIELD_PHASES = new Set(['mow', 'lime', 'cultivate', 'sow', 'harvest']);
 
 export function newFarm() {
   return {
-    version: 1,
+    version: 2,
     day: 0,
+    timeOfDay: 8.5,
     seasonStartDay: 0,
     coins: 2150,
     phase: 'clear',
@@ -38,6 +42,10 @@ export function newFarm() {
     fertilized: false,
     growthEvent: -1,
     coverage: Array(FIELD_CELLS).fill(false),
+    workMask: '',
+    workCount: 0,
+    workRevision: 0,
+    soilReportDay: null,
     harvestCount: 0,
     lastYield: 0,
     neighborJobs: [],
@@ -48,12 +56,27 @@ export function newFarm() {
 export function loadFarm(storage) {
   try {
     const stored = JSON.parse(storage.getItem('farmables-save-v1'));
-    if (stored?.version !== 1 || !Array.isArray(stored.coverage) || stored.coverage.length !== FIELD_CELLS) return newFarm();
+    if (![1, 2].includes(stored?.version) || !Array.isArray(stored.coverage) || stored.coverage.length !== FIELD_CELLS) return newFarm();
     if (!Number.isFinite(stored.coins) || !Number.isFinite(stored.day)) return newFarm();
     const farm = { ...newFarm(), ...stored, coverage: stored.coverage.map(Boolean) };
     if (!farm.positions || !['john', 'tractor', 'combine'].every(key =>
       Array.isArray(farm.positions[key]) && farm.positions[key].length >= 2 && farm.positions[key].every(Number.isFinite))) farm.positions = newFarm().positions;
     if (!Array.isArray(farm.neighborJobs)) farm.neighborJobs = [];
+    if (stored.version === 1) {
+      farm.version = 2;
+      farm.workMask = '';
+      farm.workCount = 0;
+      const width = (FIELD_BOUNDS.maxX - FIELD_BOUNDS.minX) / FIELD_COLUMNS;
+      const depth = (FIELD_BOUNDS.maxZ - FIELD_BOUNDS.minZ) / FIELD_ROWS;
+      stored.coverage.forEach((covered, index) => {
+        if (!covered) return;
+        const x = FIELD_BOUNDS.minX + (index % FIELD_COLUMNS + 0.5) * width;
+        const z = FIELD_BOUNDS.minZ + (Math.floor(index / FIELD_COLUMNS) + 0.5) * depth;
+        paintSwath(farm, x, z - depth / 2 + 1, x, z + depth / 2 - 1, width);
+      });
+    }
+    if (!Number.isFinite(farm.timeOfDay) || farm.timeOfDay < 0 || farm.timeOfDay >= 24) farm.timeOfDay = 8.5;
+    if (farm.phase === 'test_pending' && !Number.isFinite(farm.soilReportDay)) farm.soilReportDay = farm.day + 2;
     if (farm.phase === 'clear' && farm.accessCleared >= 2) farm.phase = 'test';
     return farm;
   } catch {
@@ -62,11 +85,12 @@ export function loadFarm(storage) {
 }
 
 export function saveFarm(state, storage) {
+  exportWorkMask(state);
   storage.setItem('farmables-save-v1', JSON.stringify(state));
 }
 
 export function dateLabel(day) {
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(START + day * 86400000));
+  return DATE_FORMATTER.format(new Date(START + day * 86400000));
 }
 
 export function spend(state, amount) {
@@ -83,8 +107,21 @@ export function clearAccess(state) {
 }
 
 export function sampleSoil(state) {
-  if (state.phase !== 'test' || !spend(state, PRICES.soilTest)) return false;
+  if (state.phase !== 'test') return false;
+  state.phase = 'test_collected';
+  return true;
+}
+
+export function sendSoilSample(state) {
+  if (state.phase !== 'test_collected' || !spend(state, PRICES.soilTest)) return false;
   state.phase = 'test_pending';
+  state.soilReportDay = state.day + 2;
+  return true;
+}
+
+export function readSoilReport(state) {
+  if (state.phase !== 'test_pending' || state.day < state.soilReportDay) return false;
+  state.phase = 'mow';
   return true;
 }
 
@@ -124,22 +161,22 @@ export function rentTool(state, tool) {
   }
   if (!state.tractorOwned && !state.tractorRented) return false;
   if (tool === 'lime' && !state.limeBought) return false;
-  if (tool === 'sow' && (!state.wheatSeedBought || state.day - state.seasonStartDay < 12 || state.day - state.seasonStartDay > 56)) return false;
+  if (tool === 'sow' && !state.wheatSeedBought) return false;
   const cost = { mow: PRICES.mower, lime: PRICES.spreader, cultivate: PRICES.cultivator, sow: PRICES.drill }[tool];
   if (!spend(state, cost)) return false;
   state.tool = tool;
   return true;
 }
 
-export function workCell(state, index) {
-  if (!FIELD_PHASES.has(state.phase) || state.tool !== state.phase || index < 0 || index >= FIELD_CELLS) return { changed: false, completed: false };
-  if (state.coverage[index]) return { changed: false, completed: false };
-  state.coverage[index] = true;
-  const worked = state.coverage.reduce((count, covered) => count + Number(covered), 0);
-  if (worked < COVERAGE_TARGET) return { changed: true, completed: false };
+export function workFieldSwath(state, fromX, fromZ, toX, toZ, width) {
+  if (!FIELD_PHASES.has(state.phase) || state.tool !== state.phase) return { changed: false, completed: false };
+  const changed = paintSwath(state, fromX, fromZ, toX, toZ, width);
+  if (!changed) return { changed: false, completed: false };
+  if (state.workCount < COVERAGE_TARGET) return { changed: true, completed: false };
   state.coverage.fill(false);
   const previous = state.phase;
   state.tool = null;
+  resetWork(state);
   if (previous === 'mow') state.phase = 'lime';
   if (previous === 'lime') state.phase = 'cultivate';
   if (previous === 'cultivate') state.phase = 'ready_to_sow';
@@ -160,9 +197,10 @@ export function workCell(state, index) {
 
 export function advanceToNextEvent(state) {
   if (state.phase === 'test_pending') {
-    state.day = Math.max(state.day + 2, state.seasonStartDay + 2);
-    state.phase = 'mow';
-    return 'Soil report: pH 5.8. Lime before cultivating.';
+    if (state.day >= state.soilReportDay) return null;
+    state.day = state.soilReportDay;
+    state.timeOfDay = 9;
+    return 'The laboratory report has arrived at the farmhouse.';
   }
   if (state.phase === 'ready_to_sow') {
     state.day = Math.max(state.day, state.seasonStartDay + 16);
@@ -221,12 +259,12 @@ export function helpNeighbor(state, id) {
 }
 
 export function coveragePercent(state) {
-  return Math.min(100, Math.round(state.coverage.filter(Boolean).length / COVERAGE_TARGET * 100));
+  return workPercent(state);
 }
 
 export function phaseLabel(state) {
   return ({
-    clear: 'CLEAR ACCESS', test: 'TEST SOIL', test_pending: 'SOIL REPORT',
+    clear: 'CLEAR ACCESS', test: 'TEST SOIL', test_collected: 'SOIL SAMPLE', test_pending: 'SOIL REPORT',
     mow: 'MOW WEEDS', lime: 'SPREAD LIME', cultivate: 'CULTIVATE',
     ready_to_sow: 'SOWING WINDOW', sow: 'SOW WHEAT', growing: 'WINTER WHEAT',
     spring_care: 'SPRING CARE', harvest: 'HARVEST', harvested: 'CROP SOLD',

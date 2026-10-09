@@ -10,10 +10,12 @@ import asphaltNormal from '../assets/worn_asphalt_normal.webp';
 import oakTreeUrl from '../assets/oak-tree.glb?url';
 import birchTreeUrl from '../assets/birch-tree.glb?url';
 import { FIELD_COLUMNS, FIELD_ROWS } from './farming.js';
+import { FIELD_BOUNDS, WORK_COLUMNS, WORK_ROWS, workBits, workedAt } from './fieldwork.js';
 import { BUILDING_SITES, createBuildings } from './buildings.js';
 import { createVehicles } from './vehicles.js';
+import { createAtmosphere } from './weather.js';
 
-const FIELD = { minX: -48, maxX: 108, minZ: -119, maxZ: 166 };
+const FIELD = FIELD_BOUNDS;
 const WORLD_SIZE = 1000;
 const dummy = new THREE.Object3D();
 
@@ -204,28 +206,87 @@ function road(scene) {
 function field(scene) {
   const cellWidth = (FIELD.maxX - FIELD.minX) / FIELD_COLUMNS;
   const cellDepth = (FIELD.maxZ - FIELD.minZ) / FIELD_ROWS;
-  const soilMaterial = new THREE.MeshStandardMaterial({
-    map: surfaceTexture(soilDiffuse, 0.5, 0.55, true),
-    normalMap: surfaceTexture(soilNormal, 0.5, 0.55),
-    normalScale: new THREE.Vector2(0.55, 0.55),
-    color: 0xcab49b, roughness: 1, side: THREE.DoubleSide,
-  });
-  const soilCells = [], limeCells = [];
-  const limeMaterial = new THREE.MeshStandardMaterial({ color: 0xc7c6aa, roughness: 1, side: THREE.DoubleSide });
-  for (let row = 0; row < FIELD_ROWS; row++) {
-    for (let column = 0; column < FIELD_COLUMNS; column++) {
-      const x0 = FIELD.minX + column * cellWidth, z0 = FIELD.minZ + row * cellDepth;
-      const patch = new THREE.Mesh(patchGeometry(x0, x0 + cellWidth + 0.04, z0, z0 + cellDepth + 0.04, 3, 3, 0.11), soilMaterial);
-      patch.receiveShadow = true;
-      patch.visible = false;
-      scene.add(patch);
-      soilCells.push(patch);
-      const limePatch = new THREE.Mesh(patch.geometry, limeMaterial);
-      limePatch.visible = false;
-      limePatch.receiveShadow = true;
-      scene.add(limePatch);
-      limeCells.push(limePatch);
+  function maskTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = WORK_COLUMNS;
+    canvas.height = WORK_ROWS;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    return { canvas, texture, context: canvas.getContext('2d') };
+  }
+  function limePowderTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 512;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#e0ddcd';
+    context.fillRect(0, 0, 512, 512);
+    const speckle = randomGenerator(91642);
+    for (let i = 0; i < 65000; i++) {
+      const tone = Math.floor(195 + speckle() * 55);
+      context.fillStyle = `rgba(${tone},${tone - 2},${tone - 11},${0.18 + speckle() * 0.55})`;
+      const size = 0.3 + speckle() * 1.15;
+      context.fillRect(speckle() * 512, speckle() * 512, size, size);
     }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(8, 14);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
+    return texture;
+  }
+  const masks = { mow: maskTexture(), lime: maskTexture(), cultivate: maskTexture(), sow: maskTexture() };
+  const overlayGeometry = patchGeometry(FIELD.minX, FIELD.maxX, FIELD.minZ, FIELD.maxZ, 31, 57, 0.12);
+  const uv = overlayGeometry.attributes.uv;
+  const position = overlayGeometry.attributes.position;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i,
+    (position.getX(i) - FIELD.minX) / (FIELD.maxX - FIELD.minX),
+    (position.getZ(i) - FIELD.minZ) / (FIELD.maxZ - FIELD.minZ));
+  uv.needsUpdate = true;
+  const makeOverlay = (name, material, lift) => {
+    const mesh = new THREE.Mesh(overlayGeometry.clone(), material);
+    const vertices = mesh.geometry.attributes.position;
+    for (let i = 0; i < vertices.count; i++) vertices.setY(i, vertices.getY(i) + lift);
+    vertices.needsUpdate = true;
+    mesh.receiveShadow = true;
+    mesh.visible = false;
+    scene.add(mesh);
+    return mesh;
+  };
+  const overlays = {
+    mow: makeOverlay('mow', new THREE.MeshStandardMaterial({
+      map: surfaceTexture(grassDiffuse, 6, 10, true), alphaMap: masks.mow.texture,
+      color: 0x9d9a70, transparent: true, opacity: 0.72, depthWrite: false, roughness: 1, side: THREE.DoubleSide,
+    }), 0),
+    lime: makeOverlay('lime', new THREE.MeshStandardMaterial({
+      map: limePowderTexture(), alphaMap: masks.lime.texture,
+      color: 0xe2dfd1, transparent: true, opacity: 0.4,
+      depthWrite: false, roughness: 1, side: THREE.DoubleSide,
+    }), 0.016),
+    cultivate: makeOverlay('cultivate', new THREE.MeshStandardMaterial({
+      map: surfaceTexture(soilDiffuse, 5, 9, true), normalMap: surfaceTexture(soilNormal, 5, 9),
+      alphaMap: masks.cultivate.texture, color: 0xb7a186, transparent: true,
+      depthWrite: false, roughness: 1, side: THREE.DoubleSide,
+    }), 0.032),
+    sow: makeOverlay('sow', new THREE.MeshStandardMaterial({
+      map: surfaceTexture(soilDiffuse, 5, 9, true), alphaMap: masks.sow.texture,
+      color: 0x8d785e, transparent: true, opacity: 0.26, depthWrite: false, roughness: 1, side: THREE.DoubleSide,
+    }), 0.048),
+  };
+  function paintMask(mask, state, full, speckled) {
+    const image = mask.context.createImageData(WORK_COLUMNS, WORK_ROWS);
+    const bits = full ? null : workBits(state);
+    for (let row = 0; row < WORK_ROWS; row++) for (let column = 0; column < WORK_COLUMNS; column++) {
+      const index = row * WORK_COLUMNS + column;
+      const covered = full || !!(bits[index >> 3] & (1 << (index & 7)));
+      const pixel = ((WORK_ROWS - 1 - row) * WORK_COLUMNS + column) * 4;
+      const noise = ((column * 71 + row * 97 + column * row * 13) % 101) / 100;
+      const value = covered ? (speckled ? 82 + Math.round(noise * 126) : 255) : 0;
+      image.data[pixel] = image.data[pixel + 1] = image.data[pixel + 2] = value;
+      image.data[pixel + 3] = 255;
+    }
+    mask.context.putImageData(image, 0, 0);
+    mask.texture.needsUpdate = true;
   }
 
   const furrows = new THREE.Group();
@@ -289,28 +350,30 @@ function field(scene) {
   weeds.instanceColor.needsUpdate = true;
 
   function sync(state) {
-    const key = `${state.phase}|${state.accessCleared}|${state.growthEvent}|${state.coverage.join('')}`;
+    const key = `${state.phase}|${state.accessCleared}|${state.growthEvent}|${state.workRevision}`;
     if (key === previousKey) return;
     previousKey = key;
     const phase = state.phase;
     const isCultivated = ['ready_to_sow', 'sow', 'growing', 'spring_care', 'harvest', 'harvested'].includes(phase);
     const hasCrops = ['growing', 'spring_care', 'harvest'].includes(phase);
-    const isWeedy = ['clear', 'test', 'test_pending', 'mow'].includes(phase);
+    const isWeedy = ['clear', 'test', 'test_collected', 'test_pending', 'mow'].includes(phase);
     weeds.visible = isWeedy;
     crops.visible = hasCrops;
     brambles.forEach((group, index) => { group.visible = isWeedy && state.accessCleared <= index; });
-    soilCells.forEach((patch, index) => {
-      patch.visible = isCultivated || (phase === 'cultivate' && state.coverage[index]);
-    });
-    limeCells.forEach((patch, index) => {
-      patch.visible = (phase === 'lime' && state.coverage[index]) || (phase === 'cultivate' && !state.coverage[index]);
-    });
+    overlays.mow.visible = ['lime', 'cultivate'].includes(phase) || phase === 'mow';
+    overlays.lime.visible = phase === 'lime' || phase === 'cultivate';
+    overlays.cultivate.visible = isCultivated || phase === 'cultivate';
+    overlays.sow.visible = phase === 'sow';
+    if (overlays.mow.visible) paintMask(masks.mow, state, phase !== 'mow', false);
+    if (overlays.lime.visible) paintMask(masks.lime, state, phase !== 'lime', true);
+    if (overlays.cultivate.visible) paintMask(masks.cultivate, state, phase !== 'cultivate', false);
+    if (overlays.sow.visible) paintMask(masks.sow, state, false, false);
     furrows.visible = isCultivated;
     let weedsChanged = false;
     if (isWeedy) weedPoints.forEach((point, index) => {
       const gateStrip = point.x < FIELD.minX + 2.5 && point.z > 102 && point.z < 106;
       const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 102) / 2);
-      const visible = isWeedy && !gateCleared && !(phase === 'mow' && state.coverage[point.cell]);
+      const visible = isWeedy && !gateCleared && !(phase === 'mow' && workedAt(state, point.x, point.z));
       if (weedVisibility[index] === Number(visible)) return;
       weedVisibility[index] = Number(visible);
       weedsChanged = true;
@@ -327,7 +390,7 @@ function field(scene) {
     const recolor = hasCrops && ripe !== previousCropRipe;
     let cropsChanged = false;
     if (hasCrops) cropPoints.forEach((point, index) => {
-      const visible = hasCrops && !(phase === 'harvest' && state.coverage[point.cell]);
+      const visible = hasCrops && !(phase === 'harvest' && workedAt(state, point.x, point.z));
       if (cropVisibility[index] !== Number(visible) || previousCropHeight !== cropHeight) {
         cropVisibility[index] = Number(visible);
         cropsChanged = true;
@@ -739,7 +802,8 @@ function lightAndSky(scene, renderer) {
   const sun = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.48, Math.PI * 0.28);
   sky.material.uniforms.sunPosition.value.copy(sun);
   scene.add(sky);
-  scene.add(new THREE.HemisphereLight(0xe7f1ff, 0x685f48, 1.2));
+  const hemisphere = new THREE.HemisphereLight(0xe7f1ff, 0x685f48, 1.2);
+  scene.add(hemisphere);
   const fillLight = new THREE.DirectionalLight(0xf0f1e5, 0.62);
   fillLight.position.set(145, 95, 185);
   scene.add(fillLight);
@@ -763,10 +827,11 @@ function lightAndSky(scene, renderer) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  return createAtmosphere(scene, renderer, sky, sunlight, hemisphere, fillLight);
 }
 
 export function createWorld(scene, renderer) {
-  lightAndSky(scene, renderer);
+  const atmosphere = lightAndSky(scene, renderer);
   terrain(scene);
   road(scene);
   const fieldVisual = field(scene);
@@ -776,5 +841,5 @@ export function createWorld(scene, renderer) {
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
   const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides };
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere };
 }
