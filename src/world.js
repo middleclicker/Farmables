@@ -403,6 +403,7 @@ function field(scene) {
   const weedPoints = [], cropPoints = [];
   for (let i = 0; i < 23000; i++) {
     const x = between(FIELD.minX + 1, FIELD.maxX - 1), z = between(FIELD.minZ + 1, FIELD.maxZ - 1);
+    if (Math.hypot(x + 35, z - 105) < 2.35) continue; // A small trampled place for the first soil core.
     weedPoints.push({ x, y: heightAt(x, z) + 0.05, z, cell: cellFor(x, z), rotation: between(0, Math.PI * 2), scale: between(1.3, 3.15) });
   }
   for (let x = FIELD.minX + 1.2; x < FIELD.maxX - 1; x += 2) {
@@ -417,21 +418,6 @@ function field(scene) {
   // The field's thousands of tiny blades are costly in the shadow pass.
   weeds.castShadow = false;
   scene.add(weeds, crops);
-  const brambles = [103, 105].map((z, patch) => {
-    const group = new THREE.Group();
-    const material = new THREE.MeshStandardMaterial({ color: patch ? 0x4e6835 : 0x526d39, roughness: 1 });
-    for (let i = 0; i < 6; i++) {
-      const x = FIELD.minX + 0.4 + (i % 3) * 0.78;
-      const pz = z - 0.55 + Math.floor(i / 3) * 0.88;
-      const tuft = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), material);
-      tuft.position.set(x, heightAt(x, pz) + 0.43, pz);
-      tuft.scale.set(1.05, 0.8, 0.95);
-      tuft.castShadow = true;
-      group.add(tuft);
-    }
-    scene.add(group);
-    return group;
-  });
   const color = new THREE.Color();
   let previousKey = '';
   let previousCropHeight = -1;
@@ -456,7 +442,6 @@ function field(scene) {
     const isWeedy = ['clear', 'test', 'test_collected', 'test_pending', 'mow'].includes(phase);
     weeds.visible = isWeedy;
     crops.visible = hasCrops;
-    brambles.forEach((group, index) => { group.visible = isWeedy && state.accessCleared <= index; });
     overlays.mow.visible = ['lime', 'cultivate'].includes(phase) || phase === 'mow';
     overlays.lime.visible = phase === 'lime' || phase === 'cultivate';
     overlays.cultivate.visible = isCultivated || phase === 'cultivate';
@@ -468,8 +453,8 @@ function field(scene) {
     furrows.visible = isCultivated;
     let weedsChanged = false;
     if (isWeedy) weedPoints.forEach((point, index) => {
-      const gateStrip = point.x < FIELD.minX + 2.5 && point.z > 102 && point.z < 106;
-      const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 102) / 2);
+      const gateStrip = point.x < FIELD.minX + 3 && point.z > 101 && point.z < 109;
+      const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 101) / 4);
       const visible = isWeedy && !gateCleared && !(phase === 'mow' && workedAt(state, point.x, point.z));
       if (weedVisibility[index] === Number(visible)) return;
       weedVisibility[index] = Number(visible);
@@ -630,7 +615,7 @@ function vegetation(scene, atmosphere) {
   }
   for (let z = FIELD.minZ; z < FIELD.maxZ; z += between(2.15, 3.8)) {
     for (const x of [FIELD.minX - 1.5, FIELD.maxX + 1.5]) {
-      if (x < 0 && z > 93 && z < 119) continue; // Gate near John's starting point.
+      if (x < 0 && z > 99 && z < 111) continue; // The eight-metre machinery gate.
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.45, 0.45);
       if (random() < 0.065) continue;
       bushes.push({ x: sx, y: heightAt(sx, sz) + 0.74, z: sz,
@@ -1062,6 +1047,157 @@ function town(scene, obstacles) {
   };
 }
 
+function fieldGate(scene, obstacles) {
+  const gateX = FIELD.minX - 1.55;
+  const ends = [101.1, 108.9];
+  const oak = new THREE.MeshStandardMaterial({ color: 0xa49578, roughness: 0.97 });
+  const oakEdge = new THREE.MeshStandardMaterial({ color: 0x736650, roughness: 1 });
+  const iron = new THREE.MeshStandardMaterial({ color: 0x51564f, metalness: 0.55, roughness: 0.65 });
+  const cane = new THREE.MeshStandardMaterial({ color: 0x5d4b3c, roughness: 1 });
+  const deadCane = new THREE.MeshStandardMaterial({ color: 0x958267, roughness: 1 });
+  const leafMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, side: THREE.DoubleSide });
+  const leafShape = new THREE.Shape();
+  leafShape.moveTo(0, -0.19);
+  leafShape.quadraticCurveTo(0.14, -0.11, 0.16, 0);
+  leafShape.quadraticCurveTo(0.11, 0.12, 0, 0.23);
+  leafShape.quadraticCurveTo(-0.15, 0.07, -0.14, -0.03);
+  leafShape.quadraticCurveTo(-0.11, -0.13, 0, -0.19);
+  const leafGeometry = new THREE.ShapeGeometry(leafShape, 4);
+  const gates = [];
+  const brambles = [];
+  const vineRandom = randomGenerator(794312);
+  const addBeam = (parent, from, to, thickness, material) => {
+    const direction = new THREE.Vector3().subVectors(to, from);
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(thickness, direction.length(), thickness), material);
+    beam.position.copy(from).addScaledVector(direction, 0.5);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+    beam.castShadow = true;
+    parent.add(beam);
+  };
+
+  ends.forEach((z, side) => {
+    const sign = side ? -1 : 1;
+    const base = heightAt(gateX, z);
+    const post = box(scene, 0.34, 2.35, 0.34, gateX, base + 1.175, z, oakEdge);
+    post.castShadow = true;
+    box(scene, 0.46, 0.13, 0.46, gateX, base + 2.4, z, oak);
+    obstacles.add(gateX, z, 0.3);
+
+    const leaf = new THREE.Group();
+    leaf.position.set(gateX, base, z);
+    scene.add(leaf);
+    for (const across of [0.18, 3.73]) {
+      const upright = box(leaf, 0.2, 1.55, 0.19, 0, 1.04, sign * across, oakEdge);
+      upright.castShadow = true;
+    }
+    for (const y of [0.38, 0.68, 1.0, 1.33, 1.67]) {
+      const rail = box(leaf, 0.13, 0.13, 3.62, 0, y, sign * 1.95, oak);
+      rail.castShadow = true;
+    }
+    addBeam(leaf, new THREE.Vector3(-0.11, 0.43, sign * 0.2), new THREE.Vector3(-0.11, 1.6, sign * 3.7), 0.105, oakEdge);
+    for (const y of [0.44, 1.48]) {
+      box(leaf, 0.09, 0.12, 0.45, -0.16, y, sign * 0.22, iron);
+      box(leaf, 0.1, 0.2, 0.1, -0.22, y, 0, iron);
+    }
+    box(leaf, 0.1, 0.08, 0.38, -0.13, 1.25, sign * 3.65, iron);
+    gates.push({ leaf, sign });
+
+    // Blackberry canes grow up from the verge and tangle through the rails.
+    // Thin stems and individual matte leaves read as a thorny obstruction from
+    // both sides of the gate without another large faceted shrub asset.
+    const patch = new THREE.Group();
+    patch.position.set(gateX - 0.45, base, z);
+    scene.add(patch);
+    const leafInstances = new THREE.InstancedMesh(leafGeometry, leafMaterial, 320);
+    const leafColors = [0x54684a, 0x627653, 0x72825b, 0x7b8660, 0x777453];
+    let leafIndex = 0;
+    for (let runner = 0; runner < 24; runner++) {
+      const reach = 2.45 + vineRandom() * 1.55;
+      const rise = 0.72 + vineRandom() * 1.55;
+      const depth = (vineRandom() - 0.5) * 0.85;
+      const points = [];
+      for (let step = 0; step <= 6; step++) {
+        const t = step / 6;
+        points.push(new THREE.Vector3(
+          depth + 0.25 * Math.sin(t * 8 + runner),
+          0.07 + rise * Math.sin(t * Math.PI * (0.65 + runner % 3 * 0.12)),
+          sign * (0.12 + reach * t),
+        ));
+      }
+      const curve = new THREE.CatmullRomCurve3(points);
+      const vine = new THREE.Mesh(new THREE.TubeGeometry(curve, 15, 0.018 + vineRandom() * 0.017, 5, false), runner % 5 === 0 ? deadCane : cane);
+      vine.castShadow = runner % 3 === 0;
+      patch.add(vine);
+      for (let step = 1; step <= 12 && leafIndex < leafInstances.count; step++) {
+        const t = step / 13;
+        const point = curve.getPoint(t);
+        for (const branch of [-1, 1]) {
+          if (leafIndex >= leafInstances.count) break;
+          dummy.position.set(point.x + branch * (0.11 + vineRandom() * 0.13), point.y + (vineRandom() - 0.5) * 0.18, point.z + sign * (vineRandom() - 0.5) * 0.18);
+          dummy.rotation.set((vineRandom() - 0.5) * 1.4, vineRandom() * Math.PI * 2, (vineRandom() - 0.5) * 1.5);
+          dummy.scale.setScalar(0.65 + vineRandom() * 0.5);
+          dummy.updateMatrix();
+          leafInstances.setMatrixAt(leafIndex, dummy.matrix);
+          leafInstances.setColorAt(leafIndex, new THREE.Color(leafColors[Math.floor(vineRandom() * leafColors.length)]));
+          leafIndex++;
+        }
+      }
+    }
+    leafInstances.count = leafIndex;
+    leafInstances.instanceMatrix.needsUpdate = true;
+    leafInstances.instanceColor.needsUpdate = true;
+    leafInstances.castShadow = false;
+    patch.add(leafInstances);
+    const berries = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(0.063, 0),
+      new THREE.MeshStandardMaterial({ color: 0x36313b, roughness: 0.68 }), 38,
+    );
+    for (let i = 0; i < berries.count; i++) {
+      dummy.position.set((vineRandom() - 0.5) * 0.7, 0.7 + vineRandom() * 0.9, sign * (0.45 + vineRandom() * 3.1));
+      dummy.scale.setScalar(0.68 + vineRandom() * 0.55);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      berries.setMatrixAt(i, dummy.matrix);
+    }
+    berries.instanceMatrix.needsUpdate = true;
+    patch.add(berries);
+    brambles.push(patch);
+  });
+  for (const outerZ of [99.2, 110.8]) {
+    const nearestZ = outerZ < 105 ? ends[0] : ends[1];
+    const base = heightAt(gateX, outerZ);
+    const tiePost = box(scene, 0.24, 1.85, 0.24, gateX, base + 0.925, outerZ, oakEdge);
+    tiePost.castShadow = true;
+    obstacles.add(gateX, outerZ, 0.28);
+    for (const y of [0.58, 1.2, 1.67]) {
+      const rail = box(scene, 0.11, 0.12, Math.abs(nearestZ - outerZ), gateX, base + y, (nearestZ + outerZ) / 2, oak);
+      rail.castShadow = true;
+    }
+    obstacles.add(gateX, (nearestZ + outerZ) / 2, 0.8);
+  }
+  let closed = true;
+  let firstSync = true;
+  return {
+    sync(state) {
+      closed = state.accessCleared < 2;
+      brambles.forEach((patch, index) => { patch.visible = state.phase === 'clear' && state.accessCleared <= index; });
+      if (firstSync) {
+        gates.forEach(({ leaf, sign }) => { leaf.rotation.y = closed ? 0 : sign * Math.PI * 0.5; });
+        firstSync = false;
+      }
+    },
+    update(delta) {
+      gates.forEach(({ leaf, sign }) => {
+        const target = closed ? 0 : sign * Math.PI * 0.5;
+        leaf.rotation.y += (target - leaf.rotation.y) * Math.min(1, delta * 2.7);
+      });
+    },
+    collides(x, z, radius = 0.42) {
+      return closed && Math.abs(x - gateX) < radius + 0.18 && z > ends[0] - radius && z < ends[1] + radius;
+    },
+  };
+}
+
 function farmDetails(scene, obstacles) {
   const postMat = new THREE.MeshStandardMaterial({ color: 0x8c7656, roughness: 1 });
   const railMat = new THREE.MeshStandardMaterial({ color: 0x9d8662, roughness: 1 });
@@ -1137,9 +1273,10 @@ export function createWorld(scene, renderer) {
   const village = town(scene, vegetationObstacles);
   const animals = createAnimals(scene, heightAt);
   farmDetails(scene, vegetationObstacles);
+  const gate = fieldGate(scene, vegetationObstacles);
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
   const bicycle = createBicycle(scene, heightAt);
-  const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius) || animals.collides(x, z, radius);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, bicycle, collides, atmosphere, village, animals, mapTrees: vegetationObstacles.mapTrees };
+  const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius) || gate.collides(x, z, radius) || animals.collides(x, z, radius);
+  return { heightAt, roadX, field: FIELD, fieldVisual, gate, buildings, vehicles, bicycle, collides, atmosphere, village, animals, mapTrees: vegetationObstacles.mapTrees };
 }

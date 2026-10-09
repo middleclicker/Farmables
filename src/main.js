@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createWorld, createContactShadow } from './world.js';
 import { prewarmBuildingTextures } from './buildings.js';
 import { createJohn } from './john.js';
+import { createSoilSampling } from './soil-sampling.js';
 import {
   PRICES, newFarm, loadFarm, saveFarm,
   dateLabel, phaseLabel, coveragePercent, clearAccess, sampleSoil, sendSoilSample, readSoilReport,
@@ -28,6 +29,7 @@ try {
   const camera = new THREE.PerspectiveCamera(59, innerWidth / innerHeight, 0.1, 1500);
   const world = createWorld(scene, renderer);
   const john = createJohn(scene);
+  const soilSampling = createSoilSampling(scene);
   const johnContactShadow = createContactShadow(scene, 1.45, 0.85, 0.38);
   const bicycleContactShadow = createContactShadow(scene, 2.7, 0.9, 0.31);
   const farm = loadFarm(localStorage);
@@ -43,12 +45,14 @@ try {
   restoreVehicle(world.vehicles.combine.group, farm.positions.combine);
   restoreVehicle(world.bicycle.group, farm.positions.bicycle);
   world.fieldVisual.sync(farm);
+  world.gate.sync(farm);
   world.vehicles.sync(farm);
   john.group.position.set(farm.positions.john[0], world.heightAt(...farm.positions.john), farm.positions.john[1]);
-  john.group.rotation.y = -0.08;
+  john.group.rotation.y = -Math.PI / 2;
 
   const keys = new Set();
   const panel = $('#panel');
+  const introBackdrop = $('#intro-backdrop');
   const options = $('#panel-options');
   const map = $('#minimap');
   const mapContext = map.getContext('2d');
@@ -56,7 +60,7 @@ try {
   let mapExpanded = false;
   let panelKind = null;
   let action = null;
-  let cameraYaw = -0.08;
+  let cameraYaw = -Math.PI / 2;
   let cameraPitch = 0.32;
   let cameraDistance = 10.5;
   let lastCameraDrag = 0;
@@ -120,6 +124,7 @@ try {
     if (!farm.tractorOwned && !farm.tractorRented) restoreVehicle(world.vehicles.tractor.group, [-40, 181, 0]);
     if (!farm.combineRented) restoreVehicle(world.vehicles.combine.group, [-55, 183, 0]);
     world.fieldVisual.sync(farm);
+    world.gate.sync(farm);
     world.vehicles.sync(farm);
     persist();
     renderHud();
@@ -130,8 +135,8 @@ try {
   function objective() {
     const tractor = farm.tractorOwned || farm.tractorRented;
     switch (farm.phase) {
-      case 'clear': return 'Cut the brambles blocking the field gate.';
-      case 'test': return 'Take a soil sample at the cleared gate.';
+      case 'clear': return farm.accessCleared ? 'Cut the brambles from the other gate leaf.' : 'Cut the brambles blocking the field gate.';
+      case 'test': return 'Go through the gate and take a soil sample in the field.';
       case 'test_collected': return `Drop the sample at village supplies · ◈ ${PRICES.soilTest}`;
       case 'test_pending': return farm.day >= farm.soilReportDay ? 'Read the delivered soil report at the farmhouse.' : 'The sample is at the laboratory. Work or check the farmhouse calendar.';
       case 'mow': return !tractor ? 'Rent or buy a tractor at the shed.' : !farm.tool ? 'Rent a mower at the shed.' : 'Drive the mower through the field.';
@@ -175,6 +180,20 @@ try {
     panelKind = null;
     panel.hidden = true;
     keys.clear();
+  }
+
+  function showIntro() {
+    if (farm.introSeen || farm.phase !== 'clear' || farm.accessCleared) return;
+    introBackdrop.hidden = false;
+    keys.clear();
+    $('#intro-begin').focus();
+  }
+
+  function closeIntro() {
+    if (introBackdrop.hidden) return;
+    introBackdrop.hidden = true;
+    farm.introSeen = true;
+    persist();
   }
 
   function setMapExpanded(expanded) {
@@ -335,6 +354,7 @@ try {
         restoreVehicle(world.bicycle.group, farm.positions.bicycle);
         closePanel();
         sync('A new farm begins.');
+        showIntro();
       });
       addOption('Keep playing', 'Return to the farm.', closePanel);
     } else {
@@ -354,6 +374,7 @@ try {
   }
 
   function nearbyAction() {
+    if (!introBackdrop.hidden || soilSampling.active) return null;
     if (world.bicycle.riding) return { label: 'Dismount bicycle', run: () => {
       john.group.position.copy(world.bicycle.exit(world.collides));
       renderHud();
@@ -368,10 +389,10 @@ try {
     const player = john.group.position;
     if (Math.hypot(player.x - world.bicycle.group.position.x, player.z - world.bicycle.group.position.z) < 2.6)
       return { label: 'Ride bicycle', run: () => { world.bicycle.enter(); renderHud(); } };
-    if (Math.hypot(player.x + 55, player.z - 105) < 10) {
-      if (farm.phase === 'clear') return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Soil is accessible.' : 'One patch cleared.') };
-      if (farm.phase === 'test') return { label: 'Collect soil sample', run: () => perform(() => sampleSoil(farm), 'Sample collected. Take it to village supplies for laboratory testing.') };
-    }
+    if (farm.phase === 'clear' && Math.hypot(player.x + 52, player.z - (farm.accessCleared ? 107 : 103)) < 3.2)
+      return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Enter the field for a soil sample.' : 'One side of the gate cleared.') };
+    if (farm.phase === 'test' && Math.hypot(player.x + 35, player.z - 105) < 3)
+      return { label: 'Collect soil sample', run: () => { if (soilSampling.start(john.group)) { keys.clear(); $('#objective').textContent = 'Taking a soil core…'; } } };
     const vehicle = world.vehicles.near(player);
     if (vehicle) return { label: vehicle === world.vehicles.tractor ? 'Drive tractor' : 'Drive combine', run: () => {
       if (world.vehicles.enter(player)) {
@@ -390,6 +411,7 @@ try {
   }
 
   function useAction() {
+    if (!introBackdrop.hidden || soilSampling.active) return;
     if (panelKind) { closePanel(); return; }
     nearbyAction()?.run();
   }
@@ -402,6 +424,10 @@ try {
   }
 
   window.addEventListener('keydown', event => {
+    if (!introBackdrop.hidden) {
+      if (['Enter', 'Space', 'KeyE'].includes(event.code)) { event.preventDefault(); closeIntro(); }
+      return;
+    }
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Space'].includes(event.code)) {
       event.preventDefault();
       keys.add(event.code);
@@ -415,6 +441,7 @@ try {
   window.addEventListener('blur', () => keys.clear());
   window.addEventListener('pagehide', persist);
   $('#interact').addEventListener('click', useAction);
+  $('#intro-begin').addEventListener('click', closeIntro);
   $('#panel-close').addEventListener('click', closePanel);
   $('#help-toggle').addEventListener('click', () => { $('#help').hidden = !$('#help').hidden; });
   $('#sprint-toggle').addEventListener('click', toggleSprint);
@@ -615,7 +642,8 @@ try {
       if (x < 1 || x > 179 || y < 1 || y > 179) continue;
       context.beginPath(); context.arc(x, y, mapExpanded ? 1.35 : 1, 0, Math.PI * 2); context.fill();
     }
-    const destination = ['clear', 'test'].includes(farm.phase) ? { x: -55, z: 105 } :
+    const destination = farm.phase === 'clear' ? { x: -52, z: farm.accessCleared ? 107 : 103 } :
+      farm.phase === 'test' ? { x: -35, z: 105 } :
       farm.phase === 'test_collected' ? { x: -42, z: -265 } :
       ['test_pending', 'ready_to_sow', 'growing', 'spring_care', 'harvested'].includes(farm.phase) ? { x: 38, z: 201 } :
       !farm.tool ? { x: -41, z: 198 } : { x: 30, z: 20 };
@@ -638,7 +666,7 @@ try {
     requestAnimationFrame(frame);
     const delta = Math.min(clock.getDelta(), 0.05);
     elapsed += delta;
-    const newDay = advanceClock(farm, delta);
+    const newDay = advanceClock(farm, introBackdrop.hidden ? delta : 0);
     clockHudTimer += delta;
     if (newDay || clockHudTimer > 1) {
       clockHudTimer = 0;
@@ -651,7 +679,7 @@ try {
     let subjectHeight = 1.58;
     let distance = cameraDistance;
     if (world.vehicles.driven) {
-      const vehicle = world.vehicles.update(delta, { forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1), right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1) }, world.collides);
+      const vehicle = world.vehicles.update(delta, { forward: panelKind || !introBackdrop.hidden ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1), right: panelKind || !introBackdrop.hidden ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1) }, world.collides);
       workField(vehicle, delta);
       if (world.vehicles.driven && vehicle) {
         subject = world.vehicles.activeGroup.position;
@@ -667,8 +695,8 @@ try {
       john.update(elapsed, 0);
     } else if (world.bicycle.riding) {
       const ride = world.bicycle.update(delta, {
-        forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1),
-        right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1),
+        forward: panelKind || !introBackdrop.hidden ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1),
+        right: panelKind || !introBackdrop.hidden ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1),
       }, world.collides);
       john.group.position.copy(world.bicycle.group.position);
       john.group.position.y += 0.18;
@@ -684,7 +712,7 @@ try {
       }
     } else {
       const length = Math.hypot(forwardInput, rightInput);
-      const moving = !panelKind && length > 0.05;
+      const moving = !panelKind && introBackdrop.hidden && !soilSampling.active && length > 0.05;
       const speed = sprintToggled || keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.9 : 2.7;
       if (moving) {
         const forward = forwardInput / Math.max(1, length);
@@ -701,7 +729,12 @@ try {
         john.group.rotation.y += difference * Math.min(1, delta * 12);
       }
       john.group.position.y = world.heightAt(john.group.position.x, john.group.position.z);
-      john.update(elapsed, moving ? speed : 0);
+      if (soilSampling.active) {
+        distance = Math.min(distance, 6.25);
+        const completed = soilSampling.update(delta, john.group);
+        john.updateSampling(elapsed, soilSampling.progress);
+        if (completed) perform(() => sampleSoil(farm), 'Sample bagged. Take it to village supplies for laboratory testing.');
+      } else john.update(elapsed, moving ? speed : 0);
       const inside = world.buildings.inside(john.group.position);
       if (inside) distance = Math.min(distance, 6.5);
       if (!moving && !inside && performance.now() - lastCameraDrag > 2500) {
@@ -717,6 +750,7 @@ try {
     world.village.update(elapsed, subject);
     world.animals.update(elapsed, subject);
     world.atmosphere.update(farm, delta, subject);
+    world.gate.update(delta);
     johnContactShadow.visible = !world.vehicles.driven && !world.bicycle.riding;
     johnContactShadow.position.set(john.group.position.x, world.heightAt(john.group.position.x, john.group.position.z) + 0.075, john.group.position.z);
     bicycleContactShadow.visible = world.bicycle.group.visible;
@@ -754,6 +788,7 @@ try {
   Promise.all([john.ready, shadersReady, texturesReady]).then(() => {
     loading.classList.add('done');
     setTimeout(() => loading.remove(), 700);
+    setTimeout(showIntro, 350);
   });
 } catch (cause) {
   console.error('Farmables could not start', cause);

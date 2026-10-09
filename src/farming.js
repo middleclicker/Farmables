@@ -32,6 +32,7 @@ export function newFarm() {
     seasonStartDay: 0,
     coins: 2150,
     phase: 'clear',
+    introSeen: false,
     accessCleared: 0,
     tractorOwned: false,
     tractorRented: false,
@@ -249,11 +250,13 @@ export function advanceToNextEvent(state) {
     const coins = state.coins;
     const tractorOwned = state.tractorOwned;
     const documents = state.documents;
+    const introSeen = state.introSeen;
     Object.assign(state, newFarm());
     state.harvestCount = harvestCount;
     state.coins = coins;
     state.tractorOwned = tractorOwned;
     state.documents = documents;
+    state.introSeen = introSeen;
     state.day = 365 * harvestCount;
     state.seasonStartDay = state.day;
     return 'A new farm year begins.';

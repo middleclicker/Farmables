@@ -35,6 +35,16 @@
       <div id="mobile-controls" aria-label="Touch movement controls">
         <div id="joystick"><div id="joystick-knob"></div></div>
       </div>
+      <div id="intro-backdrop" hidden>
+        <section id="intro" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+          <div class="intro-kicker">20 August · John's first season</div>
+          <h1 id="intro-title">A field to bring back.</h1>
+          <p>The previous owner left the smallholding overgrown. John has one field, a modest budget, and a chance to grow winter wheat before next summer.</p>
+          <p>The gate ahead is tangled with brambles. Clear both sides, go into the field for a soil sample, then take it to the village for testing. From there, the farm is yours to run.</p>
+          <div class="intro-route"><span class="intro-route-mark">◎</span><span>The gold ring on your map points to the next job.</span></div>
+          <div class="intro-footer"><span>WASD to move · E to interact · drag to look</span><button id="intro-begin" type="button">Begin at the gate <span aria-hidden="true">→</span></button></div>
+        </section>
+      </div>
       <div id="loading" role="status"><div class="loading-brand">Farmables</div><div class="loading-subtitle">Growing the countryside…</div></div>
       <div id="error" role="alert" hidden></div>
     </main>

@@ -72,6 +72,7 @@ export function createJohn(scene) {
   const cycleRotation = new THREE.Quaternion();
   const cycleEuler = new THREE.Euler(0, 0, 0, 'XYZ');
   let cyclingApplied = false;
+  let samplingApplied = false;
   // Quarter-turn poses place the boots over opposite pedals on this rig.
   const legFrames = {
     Left: [[-0.012, 1.357], [-0.716, 2.186], [-1.059, 1.651], [-0.263, 0.959]],
@@ -150,6 +151,31 @@ export function createJohn(scene) {
   return {
     group: john,
     ready,
+    updateSampling(time, progress) {
+      this.update(time, 0);
+      const bendIn = Math.min(1, progress * 4);
+      const bendOut = Math.max(0, Math.min(1, (1 - progress) * 5));
+      const bend = Math.min(bendIn, bendOut);
+      const pose = (name, x, z = 0) => {
+        const bone = cycleBones.get(name);
+        if (bone) bone.quaternion.copy(cyclingBaseRotations.get(name)).multiply(cycleRotation.setFromEuler(cycleEuler.set(x * bend, 0, z * bend)));
+      };
+      pose('Spine', -0.36);
+      pose('LeftArm', -0.58, -0.14);
+      pose('RightArm', -0.93, 0.12);
+      pose('LeftUpLeg', -0.24);
+      pose('RightUpLeg', 0.25);
+      pose('LeftLeg', 0.32);
+      pose('RightLeg', 0.19);
+      samplingApplied = !!mixer;
+      if (!mixer) {
+        body.rotation.x = -0.36 * bend;
+        leftArm.rotation.x = -0.58 * bend;
+        rightArm.rotation.x = -0.93 * bend;
+        leftLeg.rotation.x = -0.24 * bend;
+        rightLeg.rotation.x = 0.25 * bend;
+      }
+    },
     updateCycling(time, pedalAngle) {
       this.update(time, 0);
       const pose = (name, x, z = 0) => {
@@ -181,9 +207,10 @@ export function createJohn(scene) {
     },
     update(time, speed) {
       if (mixer) {
-        if (cyclingApplied) {
+        if (cyclingApplied || samplingApplied) {
           for (const [name, bone] of cycleBones) bone.quaternion.copy(cyclingBaseRotations.get(name));
           cyclingApplied = false;
+          samplingApplied = false;
         }
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));
         const running = speed > 4.5 && !!runAction;
