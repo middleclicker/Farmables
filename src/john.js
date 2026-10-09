@@ -176,6 +176,25 @@ export function createJohn(scene) {
         rightLeg.rotation.x = 0.25 * bend;
       }
     },
+    updateCutting(time, progress) {
+      this.update(time, 0);
+      const reach = Math.min(1, progress * 6, (1 - progress) * 6);
+      const stroke = Math.sin(progress * Math.PI * 8);
+      const pose = (name, x, z = 0) => {
+        const bone = cycleBones.get(name);
+        if (bone) bone.quaternion.copy(cyclingBaseRotations.get(name)).multiply(cycleRotation.setFromEuler(cycleEuler.set(x * reach, 0, z * reach)));
+      };
+      pose('Spine', -0.16);
+      pose('LeftArm', -0.35, -0.12);
+      pose('RightArm', -0.78 - stroke * 0.4, 0.08);
+      pose('RightForeArm', 0.25 + stroke * 0.18);
+      samplingApplied = !!mixer;
+      if (!mixer) {
+        body.rotation.x = -0.16 * reach;
+        leftArm.rotation.x = -0.35 * reach;
+        rightArm.rotation.x = (-0.78 - stroke * 0.4) * reach;
+      }
+    },
     updateCycling(time, pedalAngle) {
       this.update(time, 0);
       const pose = (name, x, z = 0) => {

@@ -1065,6 +1065,7 @@ function fieldGate(scene, obstacles) {
   const leafGeometry = new THREE.ShapeGeometry(leafShape, 4);
   const gates = [];
   const brambles = [];
+  const brambleParts = [];
   const vineRandom = randomGenerator(794312);
   const addBeam = (parent, from, to, thickness, material) => {
     const direction = new THREE.Vector3().subVectors(to, from);
@@ -1111,6 +1112,7 @@ function fieldGate(scene, obstacles) {
     const leafInstances = new THREE.InstancedMesh(leafGeometry, leafMaterial, 320);
     const leafColors = [0x54684a, 0x627653, 0x72825b, 0x7b8660, 0x777453];
     let leafIndex = 0;
+    const vineMeshes = [];
     for (let runner = 0; runner < 24; runner++) {
       const reach = 2.45 + vineRandom() * 1.55;
       const rise = 0.72 + vineRandom() * 1.55;
@@ -1128,6 +1130,7 @@ function fieldGate(scene, obstacles) {
       const vine = new THREE.Mesh(new THREE.TubeGeometry(curve, 15, 0.018 + vineRandom() * 0.017, 5, false), runner % 5 === 0 ? deadCane : cane);
       vine.castShadow = runner % 3 === 0;
       patch.add(vine);
+      vineMeshes.push(vine);
       for (let step = 1; step <= 12 && leafIndex < leafInstances.count; step++) {
         const t = step / 13;
         const point = curve.getPoint(t);
@@ -1162,6 +1165,7 @@ function fieldGate(scene, obstacles) {
     berries.instanceMatrix.needsUpdate = true;
     patch.add(berries);
     brambles.push(patch);
+    brambleParts.push({ leafInstances, fullLeafCount: leafIndex, berries, vineMeshes });
   });
   for (const outerZ of [99.2, 110.8]) {
     const nearestZ = outerZ < 105 ? ends[0] : ends[1];
@@ -1180,7 +1184,13 @@ function fieldGate(scene, obstacles) {
   return {
     sync(state) {
       closed = state.accessCleared < 2;
-      brambles.forEach((patch, index) => { patch.visible = state.phase === 'clear' && state.accessCleared <= index; });
+      brambles.forEach((patch, index) => {
+        patch.visible = state.phase === 'clear' && state.accessCleared <= index;
+        const parts = brambleParts[index];
+        parts.leafInstances.count = parts.fullLeafCount;
+        parts.berries.count = 38;
+        parts.vineMeshes.forEach(vine => { vine.visible = true; });
+      });
       if (firstSync) {
         gates.forEach(({ leaf, sign }) => { leaf.rotation.y = closed ? 0 : sign * Math.PI * 0.5; });
         firstSync = false;
@@ -1191,6 +1201,14 @@ function fieldGate(scene, obstacles) {
         const target = closed ? 0 : sign * Math.PI * 0.5;
         leaf.rotation.y += (target - leaf.rotation.y) * Math.min(1, delta * 2.7);
       });
+    },
+    cutProgress(index, progress) {
+      const parts = brambleParts[index];
+      if (!parts) return;
+      const remaining = Math.max(0, 1 - progress);
+      parts.leafInstances.count = Math.ceil(parts.fullLeafCount * remaining);
+      parts.berries.count = Math.ceil(38 * remaining);
+      parts.vineMeshes.forEach((vine, i) => { vine.visible = i / parts.vineMeshes.length < remaining; });
     },
     collides(x, z, radius = 0.42) {
       return closed && Math.abs(x - gateX) < radius + 0.18 && z > ends[0] - radius && z < ends[1] + radius;

@@ -76,6 +76,7 @@ try {
   let lastSwath = null;
   let fieldSyncTimer = 0;
   let fieldDirty = false;
+  let cutting = null;
   let clockHudTimer = 0;
   let fieldMapKey = '';
   const fieldMapLayer = document.createElement('canvas');
@@ -133,6 +134,8 @@ try {
   }
 
   function objective() {
+    if (cutting) return 'Cutting back the gate brambles…';
+    if (soilSampling.active) return 'Taking a soil core…';
     const tractor = farm.tractorOwned || farm.tractorRented;
     switch (farm.phase) {
       case 'clear': return farm.accessCleared ? 'Cut the brambles from the other gate leaf.' : 'Cut the brambles blocking the field gate.';
@@ -348,6 +351,7 @@ try {
         if (world.bicycle.riding) world.bicycle.exit(world.collides);
         john.group.visible = true;
         Object.assign(farm, newFarm());
+        cutting = null;
         john.group.position.set(-64, world.heightAt(-64, 105), 105);
         restoreVehicle(world.vehicles.tractor.group, farm.positions.tractor);
         restoreVehicle(world.vehicles.combine.group, farm.positions.combine);
@@ -374,7 +378,7 @@ try {
   }
 
   function nearbyAction() {
-    if (!introBackdrop.hidden || soilSampling.active) return null;
+    if (!introBackdrop.hidden || soilSampling.active || cutting) return null;
     if (world.bicycle.riding) return { label: 'Dismount bicycle', run: () => {
       john.group.position.copy(world.bicycle.exit(world.collides));
       renderHud();
@@ -390,7 +394,7 @@ try {
     if (Math.hypot(player.x - world.bicycle.group.position.x, player.z - world.bicycle.group.position.z) < 2.6)
       return { label: 'Ride bicycle', run: () => { world.bicycle.enter(); renderHud(); } };
     if (farm.phase === 'clear' && Math.hypot(player.x + 52, player.z - (farm.accessCleared ? 107 : 103)) < 3.2)
-      return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Enter the field for a soil sample.' : 'One side of the gate cleared.') };
+      return { label: 'Cut brambles', run: () => { cutting = { patch: farm.accessCleared, elapsed: 0 }; keys.clear(); $('#objective').textContent = 'Cutting back the gate brambles…'; } };
     if (farm.phase === 'test' && Math.hypot(player.x + 35, player.z - 105) < 3)
       return { label: 'Collect soil sample', run: () => { if (soilSampling.start(john.group)) { keys.clear(); $('#objective').textContent = 'Taking a soil core…'; } } };
     const vehicle = world.vehicles.near(player);
@@ -411,7 +415,7 @@ try {
   }
 
   function useAction() {
-    if (!introBackdrop.hidden || soilSampling.active) return;
+    if (!introBackdrop.hidden || soilSampling.active || cutting) return;
     if (panelKind) { closePanel(); return; }
     nearbyAction()?.run();
   }
@@ -712,7 +716,7 @@ try {
       }
     } else {
       const length = Math.hypot(forwardInput, rightInput);
-      const moving = !panelKind && introBackdrop.hidden && !soilSampling.active && length > 0.05;
+      const moving = !panelKind && introBackdrop.hidden && !soilSampling.active && !cutting && length > 0.05;
       const speed = sprintToggled || keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.9 : 2.7;
       if (moving) {
         const forward = forwardInput / Math.max(1, length);
@@ -729,7 +733,16 @@ try {
         john.group.rotation.y += difference * Math.min(1, delta * 12);
       }
       john.group.position.y = world.heightAt(john.group.position.x, john.group.position.z);
-      if (soilSampling.active) {
+      if (cutting) {
+        cutting.elapsed = Math.min(2.1, cutting.elapsed + delta);
+        const progress = cutting.elapsed / 2.1;
+        john.updateCutting(elapsed, progress);
+        world.gate.cutProgress(cutting.patch, progress);
+        if (progress >= 1) {
+          cutting = null;
+          perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Enter the field for a soil sample.' : 'One side of the gate cleared.');
+        }
+      } else if (soilSampling.active) {
         distance = Math.min(distance, 6.25);
         const completed = soilSampling.update(delta, john.group);
         john.updateSampling(elapsed, soilSampling.progress);
