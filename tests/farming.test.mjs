@@ -19,8 +19,9 @@ test('winter wheat progresses from neglected field through harvest and a new yea
   assert.equal(farm.coverage.length, FIELD_CELLS);
   assert.equal(dateLabel(farm.day), '20 Aug 2026');
   assert.equal(sampleSoil(farm), false);
-  for (let i = 0; i < 3; i++) assert.equal(clearAccess(farm), true);
+  for (let i = 0; i < 2; i++) assert.equal(clearAccess(farm), true);
   assert.equal(farm.phase, 'test');
+  assert.equal(clearAccess(farm), false);
   assert.equal(sampleSoil(farm), true);
   assert.match(advanceToNextEvent(farm), /pH 5.8/);
   assert.equal(farm.phase, 'mow');
@@ -80,4 +81,11 @@ test('buying equipment, village jobs, and save restore remain consistent', () =>
   assert.equal(restored.coins, farm.coins);
   assert.equal(restored.tractorOwned, true);
   assert.deepEqual(restored.neighborJobs, ['cottage_a']);
+});
+
+test('an older save with two cleared gate patches resumes at soil testing', () => {
+  const previousSave = newFarm();
+  previousSave.accessCleared = 2;
+  const adapter = { getItem: () => JSON.stringify(previousSave) };
+  assert.equal(loadFarm(adapter).phase, 'test');
 });

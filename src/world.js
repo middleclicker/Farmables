@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import grassDiffuse from '../assets/leafy_grass_diff.jpg';
-import grassNormal from '../assets/leafy_grass_normal.jpg';
-import soilDiffuse from '../assets/farm_soil_diff.jpg';
-import soilNormal from '../assets/farm_soil_normal.jpg';
-import asphaltDiffuse from '../assets/worn_asphalt_diff.jpg';
-import asphaltNormal from '../assets/worn_asphalt_normal.jpg';
+import grassDiffuse from '../assets/leafy_grass_diff.webp';
+import grassNormal from '../assets/leafy_grass_normal.webp';
+import soilDiffuse from '../assets/farm_soil_diff.webp';
+import soilNormal from '../assets/farm_soil_normal.webp';
+import asphaltDiffuse from '../assets/worn_asphalt_diff.webp';
+import asphaltNormal from '../assets/worn_asphalt_normal.webp';
 import oakTreeUrl from '../assets/oak-tree.glb?url';
 import birchTreeUrl from '../assets/birch-tree.glb?url';
 import { FIELD_COLUMNS, FIELD_ROWS } from './farming.js';
@@ -210,7 +210,8 @@ function field(scene) {
     normalScale: new THREE.Vector2(0.55, 0.55),
     color: 0xcab49b, roughness: 1, side: THREE.DoubleSide,
   });
-  const soilCells = [];
+  const soilCells = [], limeCells = [];
+  const limeMaterial = new THREE.MeshStandardMaterial({ color: 0xc7c6aa, roughness: 1, side: THREE.DoubleSide });
   for (let row = 0; row < FIELD_ROWS; row++) {
     for (let column = 0; column < FIELD_COLUMNS; column++) {
       const x0 = FIELD.minX + column * cellWidth, z0 = FIELD.minZ + row * cellDepth;
@@ -219,6 +220,11 @@ function field(scene) {
       patch.visible = false;
       scene.add(patch);
       soilCells.push(patch);
+      const limePatch = new THREE.Mesh(patch.geometry, limeMaterial);
+      limePatch.visible = false;
+      limePatch.receiveShadow = true;
+      scene.add(limePatch);
+      limeCells.push(limePatch);
     }
   }
 
@@ -239,21 +245,48 @@ function field(scene) {
   const weedPoints = [], cropPoints = [];
   for (let i = 0; i < 23000; i++) {
     const x = between(FIELD.minX + 1, FIELD.maxX - 1), z = between(FIELD.minZ + 1, FIELD.maxZ - 1);
-    weedPoints.push({ x, z, cell: cellFor(x, z), rotation: between(0, Math.PI * 2), scale: between(1.3, 3.15) });
+    weedPoints.push({ x, y: heightAt(x, z) + 0.05, z, cell: cellFor(x, z), rotation: between(0, Math.PI * 2), scale: between(1.3, 3.15) });
   }
   for (let x = FIELD.minX + 1.2; x < FIELD.maxX - 1; x += 2) {
     for (let z = FIELD.minZ + 1.2; z < FIELD.maxZ - 1; z += 1.6) {
       const px = x + between(-0.25, 0.25), pz = z + between(-0.4, 0.4);
-      cropPoints.push({ x: px, z: pz, cell: cellFor(px, pz), rotation: between(0, Math.PI * 2), scale: between(0.7, 1.16) });
+      cropPoints.push({ x: px, y: heightAt(px, pz) + 0.12, z: pz, cell: cellFor(px, pz), rotation: between(0, Math.PI * 2), scale: between(0.7, 1.16) });
     }
   }
   const weeds = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xd3d2a0, roughness: 1, side: THREE.DoubleSide }), weedPoints.length);
   const crops = new THREE.InstancedMesh(wheatPatchGeometry(), new THREE.MeshStandardMaterial({ map: wheatSilhouetteTexture(), color: 0xffffff, roughness: 1, side: THREE.DoubleSide, transparent: true, alphaTest: 0.2 }), cropPoints.length);
   weeds.frustumCulled = crops.frustumCulled = false;
-  weeds.castShadow = true;
+  // The field's thousands of tiny blades are costly in the shadow pass.
+  weeds.castShadow = false;
   scene.add(weeds, crops);
+  const brambles = [103, 105].map((z, patch) => {
+    const group = new THREE.Group();
+    const material = new THREE.MeshStandardMaterial({ color: patch ? 0x4e6835 : 0x526d39, roughness: 1 });
+    for (let i = 0; i < 6; i++) {
+      const x = FIELD.minX + 0.4 + (i % 3) * 0.78;
+      const pz = z - 0.55 + Math.floor(i / 3) * 0.88;
+      const tuft = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), material);
+      tuft.position.set(x, heightAt(x, pz) + 0.43, pz);
+      tuft.scale.set(1.05, 0.8, 0.95);
+      tuft.castShadow = true;
+      group.add(tuft);
+    }
+    scene.add(group);
+    return group;
+  });
   const color = new THREE.Color();
   let previousKey = '';
+  let previousCropHeight = -1;
+  let previousCropRipe = null;
+  const weedVisibility = new Uint8Array(weedPoints.length);
+  const cropVisibility = new Uint8Array(cropPoints.length);
+  weedVisibility.fill(2);
+  cropVisibility.fill(2);
+  weedPoints.forEach((_, index) => {
+    color.setHSL(0.20 + (index % 7) * 0.009, 0.25, 0.31 + (index % 5) * 0.025);
+    weeds.setColorAt(index, color);
+  });
+  weeds.instanceColor.needsUpdate = true;
 
   function sync(state) {
     const key = `${state.phase}|${state.accessCleared}|${state.growthEvent}|${state.coverage.join('')}`;
@@ -265,41 +298,55 @@ function field(scene) {
     const isWeedy = ['clear', 'test', 'test_pending', 'mow'].includes(phase);
     weeds.visible = isWeedy;
     crops.visible = hasCrops;
+    brambles.forEach((group, index) => { group.visible = isWeedy && state.accessCleared <= index; });
     soilCells.forEach((patch, index) => {
       patch.visible = isCultivated || (phase === 'cultivate' && state.coverage[index]);
     });
+    limeCells.forEach((patch, index) => {
+      patch.visible = (phase === 'lime' && state.coverage[index]) || (phase === 'cultivate' && !state.coverage[index]);
+    });
     furrows.visible = isCultivated;
+    let weedsChanged = false;
     if (isWeedy) weedPoints.forEach((point, index) => {
-      const gateStrip = point.x < FIELD.minX + 17 && point.z > 86 && point.z < 132;
-      const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 86) / 15);
+      const gateStrip = point.x < FIELD.minX + 2.5 && point.z > 102 && point.z < 106;
+      const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 102) / 2);
       const visible = isWeedy && !gateCleared && !(phase === 'mow' && state.coverage[point.cell]);
-      dummy.position.set(point.x, heightAt(point.x, point.z) + 0.05, point.z);
+      if (weedVisibility[index] === Number(visible)) return;
+      weedVisibility[index] = Number(visible);
+      weedsChanged = true;
+      dummy.position.set(point.x, point.y, point.z);
       dummy.rotation.set(0, point.rotation, 0);
       dummy.scale.setScalar(visible ? point.scale : 0.0001);
       dummy.updateMatrix();
       weeds.setMatrixAt(index, dummy.matrix);
-      color.setHSL(0.20 + (index % 7) * 0.009, 0.25, 0.31 + (index % 5) * 0.025);
-      weeds.setColorAt(index, color);
     });
-    if (isWeedy) {
-      weeds.instanceMatrix.needsUpdate = true;
-      weeds.instanceColor.needsUpdate = true;
-    }
+    if (weedsChanged) weeds.instanceMatrix.needsUpdate = true;
     const growth = state.growthEvent;
     const cropHeight = growth < 0 ? 0.24 : [0.43, 0.38, 0.66, 0.91, 1.0][Math.min(growth, 4)];
+    const ripe = growth >= 3;
+    const recolor = hasCrops && ripe !== previousCropRipe;
+    let cropsChanged = false;
     if (hasCrops) cropPoints.forEach((point, index) => {
       const visible = hasCrops && !(phase === 'harvest' && state.coverage[point.cell]);
-      dummy.position.set(point.x, heightAt(point.x, point.z) + 0.12, point.z);
-      dummy.rotation.set(0, point.rotation, 0);
-      dummy.scale.set(point.scale, visible ? point.scale * cropHeight : 0.0001, point.scale);
-      dummy.updateMatrix();
-      crops.setMatrixAt(index, dummy.matrix);
-      color.setHSL(growth >= 3 ? 0.125 + (index % 7) * 0.002 : 0.25 + (index % 7) * 0.004, growth >= 3 ? 0.66 : 0.42, growth >= 3 ? 0.45 + (index % 5) * 0.015 : 0.36 + (index % 5) * 0.018);
-      crops.setColorAt(index, color);
+      if (cropVisibility[index] !== Number(visible) || previousCropHeight !== cropHeight) {
+        cropVisibility[index] = Number(visible);
+        cropsChanged = true;
+        dummy.position.set(point.x, point.y, point.z);
+        dummy.rotation.set(0, point.rotation, 0);
+        dummy.scale.set(point.scale, visible ? point.scale * cropHeight : 0.0001, point.scale);
+        dummy.updateMatrix();
+        crops.setMatrixAt(index, dummy.matrix);
+      }
+      if (recolor) {
+        color.setHSL(ripe ? 0.125 + (index % 7) * 0.002 : 0.25 + (index % 7) * 0.004, ripe ? 0.66 : 0.42, ripe ? 0.45 + (index % 5) * 0.015 : 0.36 + (index % 5) * 0.018);
+        crops.setColorAt(index, color);
+      }
     });
     if (hasCrops) {
-      crops.instanceMatrix.needsUpdate = true;
-      crops.instanceColor.needsUpdate = true;
+      if (cropsChanged) crops.instanceMatrix.needsUpdate = true;
+      if (recolor) crops.instanceColor.needsUpdate = true;
+      previousCropHeight = cropHeight;
+      previousCropRipe = ripe;
     }
   }
 
@@ -323,7 +370,31 @@ function addInstanced(mesh, positions, colorFn) {
   if (colorFn) mesh.instanceColor.needsUpdate = true;
 }
 
+function colliderGrid(cellSize = 12) {
+  const cells = new Map();
+  const key = (x, z) => `${x},${z}`;
+  return {
+    add(x, z, radius) {
+      const ix = Math.floor(x / cellSize), iz = Math.floor(z / cellSize);
+      const name = key(ix, iz);
+      if (!cells.has(name)) cells.set(name, []);
+      cells.get(name).push({ x, z, radius });
+    },
+    collides(x, z, radius = 0.42) {
+      const ix = Math.floor(x / cellSize), iz = Math.floor(z / cellSize);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        for (const obstacle of cells.get(key(ix + dx, iz + dz)) || []) {
+          const limit = radius + obstacle.radius;
+          if ((x - obstacle.x) ** 2 + (z - obstacle.z) ** 2 < limit * limit) return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
 function vegetation(scene) {
+  const obstacles = colliderGrid();
   const treePositions = [];
   for (let i = 0; i < 2100 && treePositions.length < 480; i++) {
     const x = between(-480, 480), z = between(-470, 460);
@@ -336,6 +407,7 @@ function vegetation(scene) {
     if (random() > density) continue;
     treePositions.push({ x, z, y: heightAt(x, z), scale: between(0.75, 1.48), kind: random() });
   }
+  treePositions.forEach(tree => obstacles.add(tree.x, tree.z, 0.57 * tree.scale));
   const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.44, 1, 6), new THREE.MeshStandardMaterial({ color: 0x756044, roughness: 1 }), treePositions.length);
   const crowns = [0, 1, 2].map(() => new THREE.InstancedMesh(
     new THREE.SphereGeometry(1, 10, 8),
@@ -379,20 +451,23 @@ function vegetation(scene) {
   for (let x = FIELD.minX - 2; x < FIELD.maxX + 3; x += 2.7) {
     for (const z of [FIELD.minZ - 1.5, FIELD.maxZ + 1.5]) {
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.55, 0.55);
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 1.1, z: sz, sx: between(1.5, 2.1), sy: between(1.2, 1.7), sz: between(1.3, 2) });
+      if (z > FIELD.maxZ && sx > -50 && sx < -28) continue; // Machinery entrance from the yard.
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.55, z: sz, sx: between(1.2, 1.55), sy: between(0.6, 0.85), sz: between(1.2, 1.55), hedge: true });
     }
   }
   for (let z = FIELD.minZ; z < FIELD.maxZ; z += 2.7) {
     for (const x of [FIELD.minX - 1.5, FIELD.maxX + 1.5]) {
       if (x < 0 && z > 93 && z < 119) continue; // Gate near John's starting point.
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.45, 0.45);
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 1.1, z: sz, sx: between(1.4, 2), sy: between(1.1, 1.7), sz: between(1.3, 1.9) });
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.55, z: sz, sx: between(1.2, 1.55), sy: between(0.6, 0.85), sz: between(1.2, 1.55), hedge: true });
     }
   }
   const bushMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshStandardMaterial({ color: 0xc8d6a2, roughness: 1 }), bushes.length);
   addInstanced(bushMesh, bushes, (_, i) => [0x719050, 0x839b58, 0x5e804c, 0x8fa35c][i % 4]);
-  bushMesh.castShadow = true;
+  bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * 0.66));
+  bushMesh.castShadow = false;
   scene.add(bushMesh);
+  detailedHedges(scene, bushes.filter(bush => bush.hedge));
 
   const grass = [];
   for (let i = 0; i < 18000; i++) {
@@ -406,16 +481,69 @@ function vegetation(scene) {
   const grassMesh = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xe4e9b8, roughness: 1, side: THREE.DoubleSide }), grass.length);
   addInstanced(grassMesh, grass, (_, i) => [0x769452, 0x8da65a, 0xa3ad66, 0x648749][i % 4]);
   scene.add(grassMesh);
-  detailedRoadsideTrees(scene);
+  detailedRoadsideTrees(scene, obstacles);
+  return obstacles;
 }
 
-function detailedRoadsideTrees(scene) {
+function detailedHedges(scene, bushes) {
+  // Poly Haven's four low-poly shrub variants share one texture atlas. Cluster
+  // them only on the field boundary; the rest of the countryside stays instanced.
+  const alphaMap = textureLoader.load(`${import.meta.env.BASE_URL}models/shrub_03/textures/shrub_03_alpha_1k.png`);
+  alphaMap.flipY = false;
+  new GLTFLoader().load(`${import.meta.env.BASE_URL}models/shrub_03/shrub_03_1k.gltf`, gltf => {
+    const variants = [];
+    gltf.scene.traverse(child => { if (child.isMesh) variants.push(child); });
+    if (!variants.length) return;
+    const clusters = new Map();
+    const stemsPerBush = matchMedia('(pointer: coarse)').matches ? 1 : 2;
+    bushes.forEach((bush, index) => {
+      if (stemsPerBush === 1 && index % 2) return;
+      for (let stem = 0; stem < stemsPerBush; stem++) {
+        const angle = index * 2.37 + stem * 2.09;
+        const variant = (index + stem) % variants.length;
+        const key = `${Math.floor(bush.x / 80)},${Math.floor(bush.z / 80)},${variant}`;
+        if (!clusters.has(key)) clusters.set(key, { variant, stems: [] });
+        clusters.get(key).stems.push({
+          x: bush.x + Math.cos(angle) * 0.52,
+          z: bush.z + Math.sin(angle) * 0.52,
+          scale: 4.2 + (index * 17 + stem * 13) % 19 * 0.085,
+          rotation: angle,
+        });
+      }
+    });
+    for (const { variant, stems } of clusters.values()) {
+      const geometry = variants[variant].geometry;
+      const material = variants[variant].material;
+      material.side = THREE.DoubleSide;
+      material.roughness = 1;
+      material.color.set(0xc7d7b4);
+      material.alphaMap = alphaMap;
+      material.alphaTest = 0.45;
+      material.needsUpdate = true;
+      const mesh = new THREE.InstancedMesh(geometry, material, stems.length);
+      stems.forEach((stem, i) => {
+        dummy.position.set(stem.x, heightAt(stem.x, stem.z) + 0.03, stem.z);
+        dummy.rotation.set(0, stem.rotation, 0);
+        dummy.scale.set(stem.scale * 1.9, stem.scale, stem.scale * 1.9);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      mesh.castShadow = false;
+      scene.add(mesh);
+    }
+  }, undefined, cause => console.warn('Hedge detail model unavailable', cause));
+}
+
+function detailedRoadsideTrees(scene, obstacles) {
   const loader = new GLTFLoader();
   const locations = [
     [-166, 195], [-146, 115], [-180, 35], [-148, -46], [-184, -127],
     [-139, -205], [-205, -238], [-218, 231], [-230, 75], [-230, -88],
     [160, 10], [179, -79], [167, -174], [204, -227], [213, 82], [230, 194],
   ];
+  locations.forEach(([x, z]) => obstacles.add(x, z, 0.9));
   [[oakTreeUrl, 0], [birchTreeUrl, 1]].forEach(([url, kind]) => {
     loader.load(url, gltf => {
       const source = gltf.scene;
@@ -565,18 +693,20 @@ function town(scene) {
   scene.add(church);
 }
 
-function farmDetails(scene) {
+function farmDetails(scene, obstacles) {
   const postMat = new THREE.MeshStandardMaterial({ color: 0x8c7656, roughness: 1 });
   const railMat = new THREE.MeshStandardMaterial({ color: 0x9d8662, roughness: 1 });
   for (const x of [-55, -42]) {
     for (const z of [92, 121]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 2.4, 6), postMat);
       post.position.set(x, heightAt(x, z) + 1.2, z); post.castShadow = true; scene.add(post);
+      obstacles.add(x, z, 0.23);
     }
   }
   for (const z of [92, 121]) {
     const rail = box(scene, 13, 0.15, 0.15, -48.5, heightAt(-48.5, z) + 1.35, z, railMat);
     rail.castShadow = true;
+    for (let x = -54; x < -42; x += 1.6) obstacles.add(x, z, 0.25);
   }
   // Telegraph poles trace the road toward the village.
   const wood = new THREE.MeshStandardMaterial({ color: 0x77664e, roughness: 1 });
@@ -584,6 +714,7 @@ function farmDetails(scene) {
     const x = roadX(z) - 11;
     box(scene, 0.4, 8.5, 0.4, x, heightAt(x, z) + 4.25, z, wood);
     box(scene, 3.8, 0.25, 0.25, x, heightAt(x, z) + 7.5, z, wood);
+    obstacles.add(x, z, 0.36);
   }
 }
 
@@ -599,10 +730,14 @@ function lightAndSky(scene, renderer) {
   sky.material.uniforms.sunPosition.value.copy(sun);
   scene.add(sky);
   scene.add(new THREE.HemisphereLight(0xe7f1ff, 0x685f48, 1.2));
+  const fillLight = new THREE.DirectionalLight(0xf0f1e5, 0.62);
+  fillLight.position.set(145, 95, 185);
+  scene.add(fillLight);
   const sunlight = new THREE.DirectionalLight(0xffe8c5, 1.85);
   sunlight.position.set(-95, 180, -90);
   sunlight.castShadow = true;
-  sunlight.shadow.mapSize.set(2048, 2048);
+  const shadowResolution = matchMedia('(pointer: coarse)').matches ? 1024 : 2048;
+  sunlight.shadow.mapSize.set(shadowResolution, shadowResolution);
   sunlight.shadow.camera.left = -210;
   sunlight.shadow.camera.right = 210;
   sunlight.shadow.camera.top = 210;
@@ -625,10 +760,11 @@ export function createWorld(scene, renderer) {
   terrain(scene);
   road(scene);
   const fieldVisual = field(scene);
-  vegetation(scene);
+  const vegetationObstacles = vegetation(scene);
   town(scene);
-  farmDetails(scene);
+  farmDetails(scene, vegetationObstacles);
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles };
+  const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius);
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides };
 }

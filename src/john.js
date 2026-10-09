@@ -60,8 +60,12 @@ export function createJohn(scene) {
   scene.add(john);
 
   let mixer = null;
+  let idleAction = null;
   let walkAction = null;
   let runAction = null;
+  let idleWeight = 1;
+  let walkWeight = 0;
+  let runWeight = 0;
   let lastTime = 0;
   const ready = new Promise(resolve => {
     new GLTFLoader().load(johnModelUrl, gltf => {
@@ -87,17 +91,24 @@ export function createJohn(scene) {
       const walk = gltf.animations.find(clip => clip.name.toLowerCase().includes('walk'));
       const run = gltf.animations.find(clip => clip.name.toLowerCase().includes('run'));
       if (walk) {
+        // The rig's rest pose holds both arms out. Use an actual posed frame for idle.
+        const poseTime = walk.duration * 0.18;
+        const tracks = walk.tracks.map(track => new track.constructor(
+          track.name, [0], Array.from(track.createInterpolant().evaluate(poseTime)), track.getInterpolation(),
+        ));
+        idleAction = mixer.clipAction(new THREE.AnimationClip('standing', 1, tracks));
+        idleAction.play();
+        idleAction.setEffectiveWeight(1);
         walkAction = mixer.clipAction(walk);
         walkAction.play();
-        walkAction.time = 0;
         walkAction.setEffectiveWeight(0);
-        mixer.update(0);
       }
       if (run) {
         runAction = mixer.clipAction(run);
         runAction.play();
         runAction.setEffectiveWeight(0);
       }
+      mixer.update(0);
       resolve();
     }, undefined, cause => {
       console.warn('Using John fallback model', cause);
@@ -111,17 +122,22 @@ export function createJohn(scene) {
     update(time, speed) {
       if (mixer) {
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));
-        const running = speed > 7;
-        walkAction?.setEffectiveWeight(speed > 0 && !running ? 0.34 : 0);
-        runAction?.setEffectiveWeight(speed > 0 && running ? 0.42 : 0);
-        walkAction?.setEffectiveTimeScale(0.72);
-        runAction?.setEffectiveTimeScale(0.7);
+        const running = speed > 4.5 && !!runAction;
+        const smoothing = 1 - Math.exp(-delta * 10);
+        idleWeight += ((speed < 0.1 ? 1 : 0.12) - idleWeight) * smoothing;
+        walkWeight += ((speed >= 0.1 && !running ? 0.88 : 0) - walkWeight) * smoothing;
+        runWeight += ((speed >= 0.1 && running ? 0.88 : 0) - runWeight) * smoothing;
+        idleAction?.setEffectiveWeight(idleWeight);
+        walkAction?.setEffectiveWeight(walkWeight);
+        runAction?.setEffectiveWeight(runWeight);
+        walkAction?.setEffectiveTimeScale(1.25);
+        runAction?.setEffectiveTimeScale(1.35);
         mixer.update(delta);
         lastTime = time;
         return;
       }
       const gait = Math.min(1, speed / 5.2);
-      const stride = Math.sin(time * (speed > 6 ? 12 : 8.5)) * gait;
+      const stride = Math.sin(time * (speed > 4.5 ? 13 : 10)) * gait;
       leftLeg.rotation.x = stride * 0.42;
       rightLeg.rotation.x = -stride * 0.42;
       leftArm.rotation.x = -stride * 0.31;

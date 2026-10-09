@@ -9,7 +9,7 @@ Farmables is a third person browser farming game set on John's starter farm in a
 3. Drive over the field to mow, lime, cultivate, and sow. Use the farmhouse calendar to move through quiet periods. Spring fertilizer is an optional investment.
 4. Rent a combine and harvest the crop. The sale earns coins for the next season. Village cottage jobs can also earn a little money.
 
-Progress and positions save in the browser. The controls are in the game's **?** menu. Move with **WASD** or the arrow keys, hold **Shift** to run, drag to look around, and press **E** to interact or leave a vehicle. Touch devices have a movement joystick and on screen interaction button.
+Progress and positions save in the browser. The controls are in the game's **?** menu. Move with **WASD** or the arrow keys, hold **Shift** to sprint or press **C** to toggle it, drag to look around, and press **E** to interact or leave a vehicle. Touch devices have a movement joystick, sprint button, and on screen interaction button. The minimap shows cleared gate patches and each field cell as equipment passes over it.
 
 ## Run locally
 
@@ -26,4 +26,4 @@ The game is static and bundles all runtime assets. Vite uses `/Farmables/` as th
 
 ## Assets
 
-Ground, field, and road surface maps are from [Poly Haven](https://polyhaven.com/) under CC0. John's rigged farmer model and the oak and birch trees are from [Grab3D](https://grab3d.com/) under CC0. The farmer asset includes AI assisted content; its original license and disclosure are preserved in `assets/john-license.txt`. Fonts are bundled locally.
+Ground, field, and road surface maps are from [Poly Haven](https://polyhaven.com/) under CC0. The bundled building materials are Poly Haven's [weathered plank siding](https://polyhaven.com/a/weathered_plank_siding), [plaster stone wall](https://polyhaven.com/a/plaster_stone_wall_02), [rough plaster](https://polyhaven.com/a/rough_plaster_03), [roof slates](https://polyhaven.com/a/roof_slates_02), [roof tiles](https://polyhaven.com/a/roof_3), [hangar concrete floor](https://polyhaven.com/a/hangar_concrete_floor), [old wooden floor](https://polyhaven.com/a/old_wooden_floor_01), and [wood plank wall](https://polyhaven.com/a/wood_plank_wall), converted to smaller WebP images for the browser. The field hedgerow uses their [Shrub 03 model](https://polyhaven.com/a/shrub_03). John's rigged farmer model and the oak and birch trees are from [Grab3D](https://grab3d.com/) under CC0. The farmer asset includes AI assisted content; its original license and disclosure are preserved in `assets/john-license.txt`. Fonts are bundled locally.

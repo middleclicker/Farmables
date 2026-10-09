@@ -1,7 +1,7 @@
 export const FIELD_COLUMNS = 9;
 export const FIELD_ROWS = 15;
 export const FIELD_CELLS = FIELD_COLUMNS * FIELD_ROWS;
-export const COVERAGE_TARGET = Math.ceil(FIELD_CELLS * 0.68);
+export const COVERAGE_TARGET = FIELD_CELLS;
 
 export const PRICES = Object.freeze({
   soilTest: 35,
@@ -54,6 +54,7 @@ export function loadFarm(storage) {
     if (!farm.positions || !['john', 'tractor', 'combine'].every(key =>
       Array.isArray(farm.positions[key]) && farm.positions[key].length >= 2 && farm.positions[key].every(Number.isFinite))) farm.positions = newFarm().positions;
     if (!Array.isArray(farm.neighborJobs)) farm.neighborJobs = [];
+    if (farm.phase === 'clear' && farm.accessCleared >= 2) farm.phase = 'test';
     return farm;
   } catch {
     return newFarm();
@@ -77,7 +78,7 @@ export function spend(state, amount) {
 export function clearAccess(state) {
   if (state.phase !== 'clear') return false;
   state.accessCleared++;
-  if (state.accessCleared >= 3) state.phase = 'test';
+  if (state.accessCleared >= 2) state.phase = 'test';
   return true;
 }
 

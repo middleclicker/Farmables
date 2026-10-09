@@ -16,7 +16,7 @@ const error = $('#error');
 
 try {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, matchMedia('(pointer: coarse)').matches ? 1.25 : 1.5));
   renderer.setSize(innerWidth, innerHeight);
   $('#scene').appendChild(renderer.domElement);
 
@@ -29,6 +29,9 @@ try {
     group.position.set(coordinates[0], world.heightAt(coordinates[0], coordinates[1]), coordinates[1]);
     group.rotation.y = coordinates[2] || 0;
   };
+  const onFootCollides = (x, z) => world.collides(x, z) ||
+    [world.vehicles.tractor, world.vehicles.combine].some(vehicle => vehicle.group.visible &&
+      Math.hypot(x - vehicle.group.position.x, z - vehicle.group.position.z) < (vehicle === world.vehicles.combine ? 3.3 : 2.45));
   restoreVehicle(world.vehicles.tractor.group, farm.positions.tractor);
   restoreVehicle(world.vehicles.combine.group, farm.positions.combine);
   world.fieldVisual.sync(farm);
@@ -55,6 +58,7 @@ try {
   let mapTimer = 0;
   let saveTimer = 0;
   let toastTimer = 0;
+  let sprintToggled = false;
   const target = new THREE.Vector3();
   const desired = new THREE.Vector3();
   const joystick = $('#joystick');
@@ -103,7 +107,7 @@ try {
   function objective() {
     const tractor = farm.tractorOwned || farm.tractorRented;
     switch (farm.phase) {
-      case 'clear': return 'Pull the weeds at the field gate.';
+      case 'clear': return 'Cut the brambles blocking the field gate.';
       case 'test': return `Take a soil sample at the gate · ◈ ${PRICES.soilTest}`;
       case 'test_pending': return 'Collect the soil report at the farmhouse.';
       case 'mow': return !tractor ? 'Rent or buy a tractor at the shed.' : !farm.tool ? 'Rent a mower at the shed.' : 'Drive the mower through the field.';
@@ -125,14 +129,15 @@ try {
     $('#phase').textContent = phaseLabel(farm);
     $('#objective').textContent = objective();
     const fieldWork = ['mow', 'lime', 'cultivate', 'sow', 'harvest'].includes(farm.phase);
-    const percent = fieldWork ? coveragePercent(farm) : farm.phase === 'clear' ? farm.accessCleared / 3 * 100 :
+    const percent = fieldWork ? coveragePercent(farm) : farm.phase === 'clear' ? farm.accessCleared / 2 * 100 :
       ['growing', 'spring_care'].includes(farm.phase) ? (farm.growthEvent + 1) / 5 * 100 :
       farm.phase === 'harvested' ? 100 : 0;
     $('#progress').textContent = fieldWork ? `${Math.min(COVERAGE_TARGET, farm.coverage.filter(Boolean).length)} / ${COVERAGE_TARGET}` :
-      farm.phase === 'clear' ? `${farm.accessCleared} / 3` :
+      farm.phase === 'clear' ? `${farm.accessCleared} / 2` :
       ['growing', 'spring_care'].includes(farm.phase) ? `${Math.max(0, farm.growthEvent + 1)} / 5` : '';
     $('#progress-fill').style.width = `${percent}%`;
     $('#drive-hud').hidden = !world.vehicles.driven;
+    $('#sprint-toggle').hidden = !!world.vehicles.driven;
     $('#vehicle-name').textContent = world.vehicles.driven === 'combine' ? 'COMBINE' : 'TRACTOR';
     $('#drive-progress').textContent = farm.tool ? `${phaseLabel(farm)} · ${coveragePercent(farm)}%` : 'E · EXIT';
   }
@@ -240,7 +245,7 @@ try {
     } };
     const player = john.group.position;
     if (Math.hypot(player.x + 55, player.z - 105) < 10) {
-      if (farm.phase === 'clear') return { label: 'Pull weeds', run: () => perform(() => clearAccess(farm), farm.accessCleared === 2 ? 'Gate cleared. Soil is accessible.' : 'Weeds pulled.') };
+      if (farm.phase === 'clear') return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Soil is accessible.' : 'One patch cleared.') };
       if (farm.phase === 'test') return { label: `Test soil · ◈ ${PRICES.soilTest}`, run: () => perform(() => sampleSoil(farm), 'Soil sample sent. Check the farmhouse report.') };
     }
     const vehicle = world.vehicles.near(player);
@@ -265,12 +270,20 @@ try {
     nearbyAction()?.run();
   }
 
+  function toggleSprint() {
+    sprintToggled = !sprintToggled;
+    const button = $('#sprint-toggle');
+    button.setAttribute('aria-pressed', String(sprintToggled));
+    button.textContent = sprintToggled ? 'SPRINT' : 'WALK';
+  }
+
   window.addEventListener('keydown', event => {
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Space'].includes(event.code)) {
       event.preventDefault();
       keys.add(event.code);
     }
     if (event.repeat) return;
+    if (event.code === 'KeyC') toggleSprint();
     if (event.code === 'KeyE') useAction();
     if (event.code === 'Escape') { closePanel(); $('#help').hidden = true; }
   });
@@ -280,6 +293,7 @@ try {
   $('#interact').addEventListener('click', useAction);
   $('#panel-close').addEventListener('click', closePanel);
   $('#help-toggle').addEventListener('click', () => { $('#help').hidden = !$('#help').hidden; });
+  $('#sprint-toggle').addEventListener('click', toggleSprint);
   $('#reset-farm').addEventListener('click', () => { $('#help').hidden = true; openPanel('reset'); });
   $('#fullscreen').addEventListener('click', () => {
     if (document.fullscreenElement) document.exitFullscreen();
@@ -373,10 +387,49 @@ try {
     const pz = z => 90 + (z - subject.z) * scale;
     context.clearRect(0, 0, 180, 180);
     context.fillStyle = '#1b3025'; context.fillRect(0, 0, 180, 180);
-    context.fillStyle = '#53664a';
-    context.fillRect(px(world.field.minX), pz(world.field.minZ), (world.field.maxX - world.field.minX) * scale, (world.field.maxZ - world.field.minZ) * scale);
+    const { minX, maxX, minZ, maxZ } = world.field;
+    const cellWidth = (maxX - minX) / FIELD_COLUMNS;
+    const cellDepth = (maxZ - minZ) / FIELD_ROWS;
+    const colors = {
+      overgrown: '#526c3d', mown: '#8b945a', limed: '#b5b296', cultivated: '#6c5742',
+      seeded: '#645344', growing: '#78914d', ripe: '#c6a85b', harvested: '#987a50',
+    };
+    const stage = farm.phase;
+    for (let row = 0; row < FIELD_ROWS; row++) for (let column = 0; column < FIELD_COLUMNS; column++) {
+      const index = row * FIELD_COLUMNS + column;
+      const worked = !!farm.coverage[index];
+      let surface = 'overgrown';
+      if (stage === 'mow') surface = worked ? 'mown' : 'overgrown';
+      else if (stage === 'lime') surface = worked ? 'limed' : 'mown';
+      else if (stage === 'cultivate') surface = worked ? 'cultivated' : 'limed';
+      else if (stage === 'ready_to_sow') surface = 'cultivated';
+      else if (stage === 'sow') surface = worked ? 'seeded' : 'cultivated';
+      else if (stage === 'growing' || stage === 'spring_care') surface = farm.growthEvent >= 3 ? 'ripe' : 'growing';
+      else if (stage === 'harvest') surface = worked ? 'harvested' : 'ripe';
+      else if (stage === 'harvested') surface = 'harvested';
+      const x = px(minX + column * cellWidth), z = pz(minZ + row * cellDepth);
+      const w = cellWidth * scale + 0.4, d = cellDepth * scale + 0.4;
+      context.fillStyle = colors[surface];
+      context.fillRect(x, z, w, d);
+      if (surface === 'overgrown') {
+        context.fillStyle = '#a1a77070';
+        context.fillRect(x + (index % 3) * 2 + 2, z + (index % 4) * 2 + 2, 2, 2);
+      } else if (surface === 'cultivated' || surface === 'seeded' || surface === 'harvested') {
+        context.strokeStyle = surface === 'seeded' ? '#b99d7280' : '#312b2055';
+        context.lineWidth = 0.6;
+        for (let offset = 2; offset < w; offset += 3) {
+          context.beginPath(); context.moveTo(x + offset, z); context.lineTo(x + offset, z + d); context.stroke();
+        }
+      }
+    }
+    if (['clear', 'test', 'test_pending', 'mow'].includes(stage)) {
+      for (let patch = 0; patch < farm.accessCleared; patch++) {
+        context.fillStyle = '#c7ba7b';
+        context.fillRect(px(minX + 0.3), pz(102 + patch * 2), 3.3, 2.5);
+      }
+    }
     context.strokeStyle = '#d9d7b38c'; context.lineWidth = 2;
-    context.strokeRect(px(world.field.minX), pz(world.field.minZ), (world.field.maxX - world.field.minX) * scale, (world.field.maxZ - world.field.minZ) * scale);
+    context.strokeRect(px(minX), pz(minZ), (maxX - minX) * scale, (maxZ - minZ) * scale);
     context.beginPath();
     for (let z = -500; z <= 500; z += 18) {
       const x = px(world.roadX(z)), y = pz(z);
@@ -399,6 +452,10 @@ try {
     const markerY = THREE.MathUtils.clamp(pz(destination.z), 9, 171);
     context.strokeStyle = '#f5d777'; context.lineWidth = 2.5;
     context.beginPath(); context.arc(markerX, markerY, 6, 0, Math.PI * 2); context.stroke();
+    if (['clear', 'test', 'test_pending'].includes(farm.phase) && farm.accessCleared > 0) {
+      context.strokeStyle = '#bfe0a3'; context.lineWidth = 2.5;
+      context.beginPath(); context.arc(markerX, markerY, 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * farm.accessCleared); context.stroke();
+    }
     context.save(); context.translate(90, 90);
     context.rotate(world.vehicles.driven ? world.vehicles.activeGroup.rotation.y : john.group.rotation.y);
     context.fillStyle = '#fff3c6'; context.beginPath(); context.moveTo(0, -7); context.lineTo(5, 5); context.lineTo(-5, 5); context.closePath(); context.fill();
@@ -415,7 +472,7 @@ try {
     let subjectHeight = 1.58;
     let distance = cameraDistance;
     if (world.vehicles.driven) {
-      const vehicle = world.vehicles.update(delta, { forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1), right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1) }, world.buildings.collides);
+      const vehicle = world.vehicles.update(delta, { forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1), right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1) }, world.collides);
       workField(vehicle);
       if (world.vehicles.driven && vehicle) {
         subject = world.vehicles.activeGroup.position;
@@ -432,7 +489,7 @@ try {
     } else {
       const length = Math.hypot(forwardInput, rightInput);
       const moving = !panelKind && length > 0.05;
-      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 8.2 : 4.7;
+      const speed = sprintToggled || keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.9 : 2.7;
       if (moving) {
         const forward = forwardInput / Math.max(1, length);
         const right = rightInput / Math.max(1, length);
@@ -440,8 +497,8 @@ try {
         const dz = (-Math.cos(cameraYaw) * forward - Math.sin(cameraYaw) * right) * speed * delta;
         const nextX = THREE.MathUtils.clamp(john.group.position.x + dx, -475, 475);
         const nextZ = THREE.MathUtils.clamp(john.group.position.z + dz, -475, 475);
-        if (!world.buildings.collides(nextX, john.group.position.z)) john.group.position.x = nextX;
-        if (!world.buildings.collides(john.group.position.x, nextZ)) john.group.position.z = nextZ;
+        if (!onFootCollides(nextX, john.group.position.z)) john.group.position.x = nextX;
+        if (!onFootCollides(john.group.position.x, nextZ)) john.group.position.z = nextZ;
         const direction = Math.atan2(-dx, -dz);
         let difference = direction - john.group.rotation.y;
         difference = Math.atan2(Math.sin(difference), Math.cos(difference));
@@ -450,7 +507,7 @@ try {
       john.group.position.y = world.heightAt(john.group.position.x, john.group.position.z);
       john.update(elapsed, moving ? speed : 0);
       const inside = world.buildings.inside(john.group.position);
-      if (inside) { distance = Math.min(distance, 5.5); cameraPitch = Math.max(cameraPitch, 0.7); }
+      if (inside) distance = Math.min(distance, 6.5);
       if (!moving && !inside && performance.now() - lastCameraDrag > 2500) {
         const doorway = world.buildings.list.find(item => Math.hypot(subject.x - item.door.x, subject.z - item.door.z) < 12);
         if (doorway) {
