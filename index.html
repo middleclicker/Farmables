@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#19251b" />
+    <meta name="description" content="Explore John’s starter farm in a peaceful 3D English countryside." />
+    <title>Farmables — John's Farm</title>
+  </head>
+  <body>
+    <main id="game" aria-label="Farmables 3D game">
+      <div id="scene" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">✳</span><span>Farmables</span></div>
+        <div class="chapter"><span class="chapter-dot"></span> JOHN'S FARM <span class="chapter-separator">/</span> THE FIRST FIELD</div>
+      </header>
+      <div class="place-card" aria-live="polite">
+        <div class="eyebrow">WELCOME TO THE COUNTRYSIDE</div>
+        <h1>The first field</h1>
+        <p>A quiet patch of land, a road to town, and room to grow.</p>
+      </div>
+      <div class="hint" id="hint"><span class="hint-icon">✦</span><span id="hint-text">Walk around and explore the farm</span></div>
+      <footer class="controls">
+        <div class="control-group"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>move John</span></div>
+        <div class="control-group"><span class="mouse-icon"></span><span>drag to look</span></div>
+        <div class="control-group"><kbd>SHIFT</kbd><span>run</span></div>
+        <button id="fullscreen" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen">⛶</button>
+      </footer>
+      <div id="mobile-controls" aria-label="Touch movement controls">
+        <div id="joystick"><div id="joystick-knob"></div></div>
+        <div id="touch-look">DRAG TO LOOK</div>
+      </div>
+      <div id="loading" role="status"><div class="loading-brand">✳ Farmables</div><div class="loading-subtitle">Growing the countryside…</div></div>
+      <div id="error" role="alert" hidden></div>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
