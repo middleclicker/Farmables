@@ -50,6 +50,29 @@ function shadowTexture() {
   return contactShadowTexture;
 }
 
+function hedgeFoliageTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const context = canvas.getContext('2d');
+  const noise = randomGenerator(94721);
+  context.fillStyle = '#e6ebd9';
+  context.fillRect(0, 0, 256, 256);
+  const shades = ['#aebd9a', '#c4d1ae', '#d5dfc5', '#d9d1ad', '#b8c7ab'];
+  for (let i = 0; i < 3400; i++) {
+    const x = noise() * 256, y = noise() * 256;
+    context.fillStyle = shades[Math.floor(noise() * shades.length)];
+    context.beginPath();
+    context.ellipse(x, y, 1.1 + noise() * 2.2, 0.45 + noise() * 0.9, noise() * Math.PI, 0, Math.PI * 2);
+    context.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2, 1);
+  texture.anisotropy = 4;
+  return texture;
+}
+
 export function createContactShadow(scene, width, depth, opacity = 0.3) {
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(width, depth).rotateX(-Math.PI / 2),
@@ -614,32 +637,33 @@ function vegetation(scene, atmosphere) {
         sx: between(1.18, 1.82), sy: between(0.78, 1.24), sz: between(1.65, 2.55), hedge: true });
     }
   }
-  const bushGeometry = new THREE.SphereGeometry(1, 11, 8);
+  const bushGeometry = new THREE.SphereGeometry(1, 17, 12);
   const bushVertices = bushGeometry.attributes.position;
+  const bushColors = [];
   for (let i = 0; i < bushVertices.count; i++) {
     const x = bushVertices.getX(i), y = bushVertices.getY(i), z = bushVertices.getZ(i);
-    const r = 0.91 + Math.sin(x * 13 + z * 7 + y * 11) * 0.11 + Math.sin(x * 5 - z * 9) * 0.065;
+    const r = 0.94 + Math.sin(x * 13 + z * 7 + y * 11) * 0.085 + Math.sin(x * 5 - z * 9) * 0.05;
     bushVertices.setXYZ(i, x * r, y * r, z * r);
+    const shade = THREE.MathUtils.clamp(0.84 + y * 0.09 + Math.sin(x * 9 + z * 11) * 0.035, 0.71, 1);
+    bushColors.push(shade * 0.96, shade, shade * 0.9);
   }
+  bushGeometry.setAttribute('color', new THREE.Float32BufferAttribute(bushColors, 3));
   bushGeometry.computeVertexNormals();
-  const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: false }), bushes.length);
+  const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ map: hedgeFoliageTexture(), color: 0xffffff, vertexColors: true, roughness: 1, flatShading: false }), bushes.length);
   atmosphere.registerFoliage(bushMesh.material);
-  const detailedBushes = bushes.filter(bush => bush.hedge || Math.hypot(bush.x + 64, bush.z - 105) < 140);
-  const detailedBushSet = new Set(detailedBushes);
-  addInstanced(bushMesh, bushes.map(bush => bush.hedge ? { ...bush, sx: bush.sx * 0.62, sy: bush.sy * 1.08, sz: bush.sz * 0.62 } :
-    detailedBushSet.has(bush) ? { ...bush, sx: bush.sx * 0.4, sy: bush.sy * 0.45, sz: bush.sz * 0.4 } : bush),
+  addInstanced(bushMesh, bushes.map(bush => bush.hedge ? { ...bush, sx: bush.sx * 0.62, sy: bush.sy * 1.08, sz: bush.sz * 0.62 } : bush),
     (_, i) => [0x7b9768, 0x90a17a, 0x708d65, 0x94a67c, 0x817e60][i % 5]);
   const hedgeLobePositions = bushes.filter(bush => bush.hedge).map((bush, index) => {
     const angle = index * 2.399;
-    return { x: bush.x + Math.cos(angle) * bush.sx * 0.36,
-      y: bush.y + bush.sy * 0.24,
-      z: bush.z + Math.sin(angle) * bush.sz * 0.36,
-      sx: bush.sx * between(0.46, 0.72), sy: bush.sy * between(0.65, 0.95), sz: bush.sz * between(0.46, 0.72),
+    return { x: bush.x + Math.cos(angle) * bush.sx * 0.25,
+      y: bush.y + bush.sy * 0.08,
+      z: bush.z + Math.sin(angle) * bush.sz * 0.25,
+      sx: bush.sx * between(0.39, 0.52), sy: bush.sy * between(0.6, 0.82), sz: bush.sz * between(0.39, 0.52),
       rotation: angle };
   });
   const hedgeLobes = new THREE.InstancedMesh(bushGeometry, bushMesh.material, hedgeLobePositions.length);
   addInstanced(hedgeLobes, hedgeLobePositions, (_, i) => [0x78946a, 0x96a67c, 0x81996f][i % 3]);
-  bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * (bush.hedge ? 0.62 : detailedBushSet.has(bush) ? 0.28 : 0.66)));
+  bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * (bush.hedge ? 0.62 : 0.66)));
   bushMesh.castShadow = true;
   hedgeLobes.castShadow = true;
   scene.add(bushMesh, hedgeLobes);
@@ -660,7 +684,6 @@ function vegetation(scene, atmosphere) {
   bushShadows.computeBoundingSphere();
   bushShadows.renderOrder = 1;
   scene.add(bushShadows);
-  detailedHedges(scene, detailedBushes, atmosphere);
 
   const grass = [];
   for (let i = 0; i < 26000; i++) {
@@ -693,59 +716,6 @@ function vegetation(scene, atmosphere) {
   detailedRoadsideTrees(scene, obstacles, detailedTreePositions, atmosphere);
   obstacles.mapTrees = treePositions;
   return obstacles;
-}
-
-function detailedHedges(scene, bushes, atmosphere) {
-  // Poly Haven's four low-poly shrub variants share one texture atlas. Cluster
-  // them only on the field boundary; the rest of the countryside stays instanced.
-  const alphaMap = textureLoader.load(`${import.meta.env.BASE_URL}models/shrub_03/textures/shrub_03_alpha_1k.png`);
-  alphaMap.flipY = false;
-  new GLTFLoader().load(`${import.meta.env.BASE_URL}models/shrub_03/shrub_03_1k.gltf`, gltf => {
-    const variants = [];
-    gltf.scene.traverse(child => { if (child.isMesh) variants.push(child); });
-    if (!variants.length) return;
-    const clusters = new Map();
-    const stemsPerBush = matchMedia('(pointer: coarse)').matches ? 1 : 3;
-    bushes.forEach((bush, index) => {
-      if (stemsPerBush === 1 && bush.hedge && index % 2) return;
-      const count = bush.hedge ? stemsPerBush : stemsPerBush * 2;
-      for (let stem = 0; stem < count; stem++) {
-        const angle = index * 2.37 + stem * 2.09;
-        const variant = bush.hedge ? (index + stem) % variants.length : 0;
-        const key = `${Math.floor(bush.x / 80)},${Math.floor(bush.z / 80)},${variant}`;
-        if (!clusters.has(key)) clusters.set(key, { variant, stems: [] });
-        clusters.get(key).stems.push({
-          x: bush.x + Math.cos(angle) * 0.52,
-          z: bush.z + Math.sin(angle) * 0.52,
-          scale: (4.2 + (index * 17 + stem * 13) % 19 * 0.085) * (bush.hedge ? 1 : Math.max(0.8, bush.sx * 1.25)),
-          rotation: angle,
-        });
-      }
-    });
-    for (const { variant, stems } of clusters.values()) {
-      const geometry = variants[variant].geometry;
-      const material = variants[variant].material;
-      material.side = THREE.DoubleSide;
-      material.roughness = 1;
-      material.color.set(0xcbd0bf);
-      atmosphere.registerFoliage(material);
-      material.alphaMap = alphaMap;
-      material.alphaTest = 0.45;
-      material.needsUpdate = true;
-      const mesh = new THREE.InstancedMesh(geometry, material, stems.length);
-      stems.forEach((stem, i) => {
-        dummy.position.set(stem.x, heightAt(stem.x, stem.z) + 0.03, stem.z);
-        dummy.rotation.set(0, stem.rotation, 0);
-        dummy.scale.set(stem.scale * 1.9, stem.scale, stem.scale * 1.9);
-        dummy.updateMatrix();
-        mesh.setMatrixAt(i, dummy.matrix);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
-      mesh.castShadow = false;
-      scene.add(mesh);
-    }
-  }, undefined, cause => console.warn('Hedge detail model unavailable', cause));
 }
 
 function detailedRoadsideTrees(scene, obstacles, woodlandTrees = [], atmosphere) {

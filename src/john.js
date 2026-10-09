@@ -68,8 +68,22 @@ export function createJohn(scene) {
   let runWeight = 0;
   let lastTime = 0;
   const cycleBones = new Map();
-  const cycleAxis = new THREE.Vector3(1, 0, 0);
+  const cyclingBaseRotations = new Map();
   const cycleRotation = new THREE.Quaternion();
+  const cycleEuler = new THREE.Euler(0, 0, 0, 'XYZ');
+  let cyclingApplied = false;
+  // Quarter-turn poses place the boots over opposite pedals on this rig.
+  const legFrames = {
+    Left: [[-0.012, 1.357], [-0.716, 2.186], [-1.059, 1.651], [-0.263, 0.959]],
+    Right: [[0.084, 1.103], [-0.577, 1.937], [-0.959, 1.423], [-0.171, 0.705]],
+  };
+  function cycleValue(frames, phase, component) {
+    const position = THREE.MathUtils.euclideanModulo(phase, 1) * 4;
+    const i = Math.floor(position), t = position - i;
+    const a = frames[(i + 3) % 4][component], b = frames[i][component];
+    const c = frames[(i + 1) % 4][component], d = frames[(i + 2) % 4][component];
+    return b + 0.5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+  }
   const ready = new Promise(resolve => {
     new GLTFLoader().load(johnModelUrl, gltf => {
       const model = gltf.scene;
@@ -123,6 +137,9 @@ export function createJohn(scene) {
         runAction.setEffectiveWeight(0);
       }
       mixer.update(0);
+      // A one-frame standing clip may skip redundant writes. Always apply the
+      // riding pose from this saved base so its rotations cannot accumulate.
+      for (const [name, bone] of cycleBones) cyclingBaseRotations.set(name, bone.quaternion.clone());
       resolve();
     }, undefined, cause => {
       console.warn('Using John fallback model', cause);
@@ -133,27 +150,41 @@ export function createJohn(scene) {
   return {
     group: john,
     ready,
-    updateCycling(time, speed) {
+    updateCycling(time, pedalAngle) {
       this.update(time, 0);
-      const pose = (name, angle) => cycleBones.get(name)?.quaternion.multiply(cycleRotation.setFromAxisAngle(cycleAxis, angle));
-      const cadence = Math.sin(time * Math.max(2.4, Math.abs(speed) * 1.25));
-      pose('LeftUpLeg', 1.12 + cadence * 0.22);
-      pose('RightUpLeg', 1.12 - cadence * 0.22);
-      pose('LeftLeg', -1.28 + cadence * 0.22);
-      pose('RightLeg', -1.28 - cadence * 0.22);
-      pose('LeftArm', 0.62);
-      pose('RightArm', 0.62);
-      pose('LeftForeArm', -0.48);
-      pose('RightForeArm', -0.48);
+      const pose = (name, x, z = 0) => {
+        const bone = cycleBones.get(name);
+        if (bone) bone.quaternion.copy(cyclingBaseRotations.get(name)).multiply(cycleRotation.setFromEuler(cycleEuler.set(x, 0, z)));
+      };
+      const phase = -pedalAngle / (Math.PI * 2);
+      pose('Spine', -0.17);
+      pose('LeftArm', -1.13, -0.45);
+      pose('RightArm', -1.15, 0.11);
+      pose('LeftForeArm', 0.61);
+      pose('RightForeArm', 0.55);
+      for (const side of ['Left', 'Right']) {
+        const localPhase = phase + (side === 'Right' ? 0.5 : 0);
+        const thigh = cycleValue(legFrames[side], localPhase, 0);
+        const calf = cycleValue(legFrames[side], localPhase, 1);
+        pose(`${side}UpLeg`, thigh);
+        pose(`${side}Leg`, calf);
+        pose(`${side}Foot`, -(thigh + calf) * 0.8);
+      }
+      cyclingApplied = true;
       if (!mixer) {
-        leftLeg.rotation.x = 1.12 + cadence * 0.22;
-        rightLeg.rotation.x = 1.12 - cadence * 0.22;
-        leftArm.rotation.x = 0.62;
-        rightArm.rotation.x = 0.62;
+        leftLeg.rotation.x = cycleValue(legFrames.Left, phase, 0);
+        rightLeg.rotation.x = cycleValue(legFrames.Right, phase + 0.5, 0);
+        leftArm.rotation.x = -1.13;
+        rightArm.rotation.x = -1.15;
+        body.rotation.x = -0.17;
       }
     },
     update(time, speed) {
       if (mixer) {
+        if (cyclingApplied) {
+          for (const [name, bone] of cycleBones) bone.quaternion.copy(cyclingBaseRotations.get(name));
+          cyclingApplied = false;
+        }
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));
         const running = speed > 4.5 && !!runAction;
         const smoothing = 1 - Math.exp(-delta * (speed < 0.1 ? 17 : 11));
@@ -176,6 +207,7 @@ export function createJohn(scene) {
       leftArm.rotation.x = -stride * 0.31;
       rightArm.rotation.x = stride * 0.31;
       body.position.y = Math.abs(stride) * 0.035;
+      body.rotation.x = 0;
       body.rotation.z = -stride * 0.012;
     },
   };

@@ -673,7 +673,7 @@ try {
       john.group.position.copy(world.bicycle.group.position);
       john.group.position.y += 0.18;
       john.group.rotation.y = world.bicycle.group.rotation.y;
-      john.updateCycling(elapsed, ride.speed);
+      john.updateCycling(elapsed, ride.pedalAngle);
       subject = world.bicycle.group.position;
       distance = Math.max(cameraDistance, 11.5);
       $('#vehicle-speed').textContent = `${Math.round(Math.abs(ride.speed) * 3.6)} km/h`;

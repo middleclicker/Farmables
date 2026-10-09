@@ -30,6 +30,9 @@ function wheel(parent, z) {
     const angle = i * Math.PI / 6;
     tube(wheel, [0, 0, 0], [0, Math.sin(angle) * 0.35, Math.cos(angle) * 0.35], 0.003, steel, 4).castShadow = false;
   }
+  const spokeReflector = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.085, 0.11), amber);
+  spokeReflector.position.set(0.035, 0.2, 0.18);
+  wheel.add(spokeReflector);
   tube(wheel, [-0.09, 0, 0], [0.09, 0, 0], 0.028, steel);
   parent.add(wheel);
   return wheel;
@@ -52,13 +55,29 @@ export function createBicycle(scene, heightAt) {
   tube(group, [-0.37, 1.2, -0.61], [0.37, 1.2, -0.61], 0.023, steel);
   for (const side of [-1, 1]) {
     tube(group, [side * 0.29, 1.2, -0.61], [side * 0.37, 1.2, -0.61], 0.033, leather);
-    tube(group, [0, 0.5, 0.1], [side * 0.15, 0.5, 0.1], 0.028, steel);
   }
   const seat = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.065, 0.29), leather);
   seat.position.set(0, 1.19, 0.37);
   seat.castShadow = true;
   group.add(seat);
-  tube(group, [-0.23, 0.48, 0.1], [0.23, 0.48, 0.1], 0.022, steel);
+  const crankset = new THREE.Group();
+  crankset.position.set(...crank);
+  group.add(crankset);
+  const chainring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.018, 6, 24), steel);
+  chainring.rotation.y = Math.PI / 2;
+  chainring.position.x = 0.09;
+  crankset.add(chainring);
+  const pedals = [];
+  for (const side of [-1, 1]) {
+    tube(crankset, [side * 0.16, 0, 0], [side * 0.16, 0, side * 0.2], 0.027, steel);
+    const pedal = new THREE.Group();
+    pedal.position.set(side * 0.18, 0, side * 0.2);
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.045, 0.21), rubber);
+    platform.castShadow = true;
+    pedal.add(platform);
+    crankset.add(pedal);
+    pedals.push(pedal);
+  }
   const reflector = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.035), amber);
   reflector.position.set(0, 0.86, 0.83);
   group.add(reflector);
@@ -66,10 +85,12 @@ export function createBicycle(scene, heightAt) {
   scene.add(group);
   let speed = 0;
   let riding = false;
+  let pedalAngle = 0;
   return {
     group,
     get speed() { return speed; },
     get riding() { return riding; },
+    get pedalAngle() { return pedalAngle; },
     get heading() { return group.rotation.y; },
     enter() { riding = true; stand.visible = false; },
     exit(collides) {
@@ -97,7 +118,10 @@ export function createBicycle(scene, heightAt) {
       group.position.y = heightAt(group.position.x, group.position.z);
       rear.rotation.x -= speed * delta / 0.39;
       front.rotation.x -= speed * delta / 0.39;
-      return { speed, heading: group.rotation.y };
+      pedalAngle -= speed * delta / (0.39 * 2.6);
+      crankset.rotation.x = pedalAngle;
+      for (const pedal of pedals) pedal.rotation.x = -pedalAngle;
+      return { speed, heading: group.rotation.y, pedalAngle };
     },
   };
 }
