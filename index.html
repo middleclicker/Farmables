@@ -4,32 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#19251b" />
-    <meta name="description" content="Explore John’s starter farm in a peaceful 3D English countryside." />
+    <meta name="description" content="Run John's farm through a full winter wheat season." />
     <title>Farmables — John's Farm</title>
   </head>
   <body>
     <main id="game" aria-label="Farmables 3D game">
       <div id="scene" aria-hidden="true"></div>
       <div class="vignette" aria-hidden="true"></div>
-      <header class="topbar">
-        <div class="brand"><span class="brand-mark">✳</span><span>Farmables</span></div>
-        <div class="chapter"><span class="chapter-dot"></span> JOHN'S FARM <span class="chapter-separator">/</span> THE FIRST FIELD</div>
+      <header class="hud-top">
+        <div class="game-mark" aria-label="Farmables">✳</div>
+        <div class="hud-stats"><span id="date">20 AUG 2026</span><span class="stat-divider"></span><span class="coin-mark">◈</span><span id="coins">2,150</span></div>
+        <button id="fullscreen" class="icon-button" type="button" aria-label="Toggle fullscreen" title="Fullscreen">⛶</button>
       </header>
-      <div class="place-card" aria-live="polite">
-        <div class="eyebrow">WELCOME TO THE COUNTRYSIDE</div>
-        <h1>The first field</h1>
-        <p>A quiet patch of land, a road to town, and room to grow.</p>
-      </div>
-      <div class="hint" id="hint"><span class="hint-icon">✦</span><span id="hint-text">Walk around and explore the farm</span></div>
-      <footer class="controls">
-        <div class="control-group"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>move John</span></div>
-        <div class="control-group"><span class="mouse-icon"></span><span>drag to look</span></div>
-        <div class="control-group"><kbd>SHIFT</kbd><span>run</span></div>
-        <button id="fullscreen" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen">⛶</button>
-      </footer>
+      <section id="field-status" aria-live="polite">
+        <div class="status-heading"><span id="phase">CLEAR ACCESS</span><span id="progress">0 / 3</span></div>
+        <div id="objective">Clear the weeds by the field gate.</div>
+        <div class="progress-track"><div id="progress-fill"></div></div>
+      </section>
+      <canvas id="minimap" width="180" height="180" aria-label="Farm map"></canvas>
+      <button id="interact" type="button" hidden><kbd>E</kbd><span id="interact-text"></span></button>
+      <div id="drive-hud" hidden><span id="vehicle-name">TRACTOR</span><span id="vehicle-speed">0 km/h</span><span id="drive-progress"></span></div>
+      <div id="toast" role="status" aria-live="polite"></div>
+      <section id="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title" hidden>
+        <div class="panel-header"><div><div id="panel-kicker"></div><h2 id="panel-title"></h2></div><button id="panel-close" type="button" aria-label="Close">×</button></div>
+        <div id="panel-options"></div>
+      </section>
+      <button id="help-toggle" class="icon-button" type="button" aria-label="Controls" title="Controls">?</button>
+      <div id="help" hidden><strong>Controls</strong><span>WASD / arrows · move</span><span>Shift · run</span><span>Drag · look around</span><span>E · interact / exit vehicle</span><span>Esc · close menu</span><button id="reset-farm" type="button">Start a new farm</button></div>
       <div id="mobile-controls" aria-label="Touch movement controls">
         <div id="joystick"><div id="joystick-knob"></div></div>
-        <div id="touch-look">DRAG TO LOOK</div>
       </div>
       <div id="loading" role="status"><div class="loading-brand">✳ Farmables</div><div class="loading-subtitle">Growing the countryside…</div></div>
       <div id="error" role="alert" hidden></div>

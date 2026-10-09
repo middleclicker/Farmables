@@ -90,7 +90,7 @@ export function createJohn(scene) {
         walkAction = mixer.clipAction(walk);
         walkAction.play();
         walkAction.time = 0;
-        walkAction.setEffectiveWeight(1);
+        walkAction.setEffectiveWeight(0);
         mixer.update(0);
       }
       if (run) {
@@ -112,9 +112,11 @@ export function createJohn(scene) {
       if (mixer) {
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));
         const running = speed > 7;
-        walkAction?.setEffectiveWeight(running ? 0 : 1);
-        runAction?.setEffectiveWeight(running ? 1 : 0);
-        if (speed > 0) mixer.update(delta);
+        walkAction?.setEffectiveWeight(speed > 0 && !running ? 0.34 : 0);
+        runAction?.setEffectiveWeight(speed > 0 && running ? 0.42 : 0);
+        walkAction?.setEffectiveTimeScale(0.72);
+        runAction?.setEffectiveTimeScale(0.7);
+        mixer.update(delta);
         lastTime = time;
         return;
       }

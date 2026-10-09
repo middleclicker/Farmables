@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "check": "node --check src/main.js && node --check src/world.js && node --check src/john.js"
+    "check": "node --check src/main.js && node --check src/world.js && node --check src/john.js && node --check src/farming.js && node --check src/buildings.js && node --check src/vehicles.js",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.3.0",

@@ -9,6 +9,9 @@ import asphaltDiffuse from '../assets/worn_asphalt_diff.jpg';
 import asphaltNormal from '../assets/worn_asphalt_normal.jpg';
 import oakTreeUrl from '../assets/oak-tree.glb?url';
 import birchTreeUrl from '../assets/birch-tree.glb?url';
+import { FIELD_COLUMNS, FIELD_ROWS } from './farming.js';
+import { BUILDING_SITES, createBuildings } from './buildings.js';
+import { createVehicles } from './vehicles.js';
 
 const FIELD = { minX: -48, maxX: 108, minZ: -119, maxZ: 166 };
 const WORLD_SIZE = 1000;
@@ -31,7 +34,7 @@ function surfaceTexture(url, repeatX, repeatY, color = false) {
   return texture;
 }
 
-export function heightAt(x, z) {
+function rawHeightAt(x, z) {
   const rolling = 1.45 * Math.sin(x / 72) * Math.cos(z / 89)
     + 0.8 * Math.sin((x + z) / 48)
     + 0.42 * Math.sin(x / 24 + z / 39);
@@ -39,6 +42,19 @@ export function heightAt(x, z) {
   const eastHill = 14 * Math.exp(-((x - 360) ** 2 / 49000 + (z + 270) ** 2 / 125000));
   const farHill = 8 * Math.exp(-((z + 465) ** 2 / 42000)) * Math.sin(x / 105 + 1.8) ** 2;
   return rolling + westHill + eastHill + farHill;
+}
+
+export function heightAt(x, z) {
+  const original = rawHeightAt(x, z);
+  for (const site of BUILDING_SITES) {
+    const halfWidth = site.width / 2 + 1;
+    const halfDepth = site.depth / 2 + 1;
+    const edge = Math.max((Math.abs(x - site.x) - halfWidth) / 6, (Math.abs(z - site.z) - halfDepth) / 6);
+    if (edge >= 1) continue;
+    const blend = THREE.MathUtils.smoothstep(Math.max(0, edge), 0, 1);
+    return THREE.MathUtils.lerp(rawHeightAt(site.x, site.z), original, blend);
+  }
+  return original;
 }
 
 export function roadX(z) {
@@ -186,46 +202,108 @@ function road(scene) {
 }
 
 function field(scene) {
-  const soil = new THREE.Mesh(
-    patchGeometry(FIELD.minX, FIELD.maxX, FIELD.minZ, FIELD.maxZ, 52, 90, 0.095),
-    new THREE.MeshStandardMaterial({
-      map: surfaceTexture(soilDiffuse, 5.2, 9.5, true),
-      normalMap: surfaceTexture(soilNormal, 5.2, 9.5),
-      normalScale: new THREE.Vector2(0.55, 0.55),
-      color: 0xd9c8ae, roughness: 1, side: THREE.DoubleSide,
-    }),
-  );
-  soil.receiveShadow = true;
-  scene.add(soil);
-
-  const furrowMaterials = [0xcab493, 0xbda987, 0xd0b99a].map(color => new THREE.MeshStandardMaterial({
-    map: surfaceTexture(soilDiffuse, 0.21, 6, true), color, roughness: 1, side: THREE.DoubleSide,
-  }));
-  for (let x = FIELD.minX + 2.3, i = 0; x < FIELD.maxX - 2; x += 3.4, i++) {
-    stripAlongZ(scene, () => x, FIELD.minZ + 4, FIELD.maxZ - 4, 0.87, furrowMaterials[i % furrowMaterials.length], 0.145, 44);
-  }
-
-  const seedlings = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xb9d78a, roughness: 1, side: THREE.DoubleSide }), 14000);
-  seedlings.count = 0;
-  const color = new THREE.Color();
-  for (let x = FIELD.minX + 2.25; x < FIELD.maxX - 2; x += 3.4) {
-    for (let z = FIELD.minZ + 5; z < FIELD.maxZ - 5; z += 1.05) {
-      if (random() < 0.045) continue;
-      const px = x + between(-0.22, 0.22), pz = z + between(-0.5, 0.5);
-      dummy.position.set(px, heightAt(px, pz) + 0.16, pz);
-      dummy.rotation.set(0, between(0, Math.PI * 2), 0);
-      dummy.scale.setScalar(between(0.6, 1.05));
-      dummy.updateMatrix();
-      seedlings.setMatrixAt(seedlings.count, dummy.matrix);
-      color.setHSL(between(0.23, 0.3), between(0.38, 0.55), between(0.3, 0.47));
-      seedlings.setColorAt(seedlings.count, color);
-      seedlings.count++;
+  const cellWidth = (FIELD.maxX - FIELD.minX) / FIELD_COLUMNS;
+  const cellDepth = (FIELD.maxZ - FIELD.minZ) / FIELD_ROWS;
+  const soilMaterial = new THREE.MeshStandardMaterial({
+    map: surfaceTexture(soilDiffuse, 0.5, 0.55, true),
+    normalMap: surfaceTexture(soilNormal, 0.5, 0.55),
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    color: 0xcab49b, roughness: 1, side: THREE.DoubleSide,
+  });
+  const soilCells = [];
+  for (let row = 0; row < FIELD_ROWS; row++) {
+    for (let column = 0; column < FIELD_COLUMNS; column++) {
+      const x0 = FIELD.minX + column * cellWidth, z0 = FIELD.minZ + row * cellDepth;
+      const patch = new THREE.Mesh(patchGeometry(x0, x0 + cellWidth + 0.04, z0, z0 + cellDepth + 0.04, 3, 3, 0.11), soilMaterial);
+      patch.receiveShadow = true;
+      patch.visible = false;
+      scene.add(patch);
+      soilCells.push(patch);
     }
   }
-  seedlings.instanceMatrix.needsUpdate = true;
-  seedlings.instanceColor.needsUpdate = true;
-  seedlings.castShadow = true;
-  scene.add(seedlings);
+
+  const furrows = new THREE.Group();
+  furrows.visible = false;
+  scene.add(furrows);
+  const ridgeMaterial = new THREE.MeshStandardMaterial({ map: surfaceTexture(soilDiffuse, 0.2, 6, true), color: 0xbda483, roughness: 1, side: THREE.DoubleSide });
+  for (let x = FIELD.minX + 2.3; x < FIELD.maxX - 2; x += 3.4) {
+    stripAlongZ(furrows, () => x, FIELD.minZ + 4, FIELD.maxZ - 4, 0.56, ridgeMaterial, 0.17, 44);
+  }
+
+  const cellFor = (x, z) => {
+    if (x < FIELD.minX || x >= FIELD.maxX || z < FIELD.minZ || z >= FIELD.maxZ) return -1;
+    const column = Math.floor((x - FIELD.minX) / cellWidth);
+    const row = Math.floor((z - FIELD.minZ) / cellDepth);
+    return row * FIELD_COLUMNS + column;
+  };
+  const weedPoints = [], cropPoints = [];
+  for (let i = 0; i < 23000; i++) {
+    const x = between(FIELD.minX + 1, FIELD.maxX - 1), z = between(FIELD.minZ + 1, FIELD.maxZ - 1);
+    weedPoints.push({ x, z, cell: cellFor(x, z), rotation: between(0, Math.PI * 2), scale: between(1.3, 3.15) });
+  }
+  for (let x = FIELD.minX + 1.2; x < FIELD.maxX - 1; x += 2) {
+    for (let z = FIELD.minZ + 1.2; z < FIELD.maxZ - 1; z += 1.6) {
+      const px = x + between(-0.25, 0.25), pz = z + between(-0.4, 0.4);
+      cropPoints.push({ x: px, z: pz, cell: cellFor(px, pz), rotation: between(0, Math.PI * 2), scale: between(0.7, 1.16) });
+    }
+  }
+  const weeds = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xd3d2a0, roughness: 1, side: THREE.DoubleSide }), weedPoints.length);
+  const crops = new THREE.InstancedMesh(wheatPatchGeometry(), new THREE.MeshStandardMaterial({ map: wheatSilhouetteTexture(), color: 0xffffff, roughness: 1, side: THREE.DoubleSide, transparent: true, alphaTest: 0.2 }), cropPoints.length);
+  weeds.frustumCulled = crops.frustumCulled = false;
+  weeds.castShadow = true;
+  scene.add(weeds, crops);
+  const color = new THREE.Color();
+  let previousKey = '';
+
+  function sync(state) {
+    const key = `${state.phase}|${state.accessCleared}|${state.growthEvent}|${state.coverage.join('')}`;
+    if (key === previousKey) return;
+    previousKey = key;
+    const phase = state.phase;
+    const isCultivated = ['ready_to_sow', 'sow', 'growing', 'spring_care', 'harvest', 'harvested'].includes(phase);
+    const hasCrops = ['growing', 'spring_care', 'harvest'].includes(phase);
+    const isWeedy = ['clear', 'test', 'test_pending', 'mow'].includes(phase);
+    weeds.visible = isWeedy;
+    crops.visible = hasCrops;
+    soilCells.forEach((patch, index) => {
+      patch.visible = isCultivated || (phase === 'cultivate' && state.coverage[index]);
+    });
+    furrows.visible = isCultivated;
+    if (isWeedy) weedPoints.forEach((point, index) => {
+      const gateStrip = point.x < FIELD.minX + 17 && point.z > 86 && point.z < 132;
+      const gateCleared = gateStrip && state.accessCleared > Math.floor((point.z - 86) / 15);
+      const visible = isWeedy && !gateCleared && !(phase === 'mow' && state.coverage[point.cell]);
+      dummy.position.set(point.x, heightAt(point.x, point.z) + 0.05, point.z);
+      dummy.rotation.set(0, point.rotation, 0);
+      dummy.scale.setScalar(visible ? point.scale : 0.0001);
+      dummy.updateMatrix();
+      weeds.setMatrixAt(index, dummy.matrix);
+      color.setHSL(0.20 + (index % 7) * 0.009, 0.25, 0.31 + (index % 5) * 0.025);
+      weeds.setColorAt(index, color);
+    });
+    if (isWeedy) {
+      weeds.instanceMatrix.needsUpdate = true;
+      weeds.instanceColor.needsUpdate = true;
+    }
+    const growth = state.growthEvent;
+    const cropHeight = growth < 0 ? 0.24 : [0.43, 0.38, 0.66, 0.91, 1.0][Math.min(growth, 4)];
+    if (hasCrops) cropPoints.forEach((point, index) => {
+      const visible = hasCrops && !(phase === 'harvest' && state.coverage[point.cell]);
+      dummy.position.set(point.x, heightAt(point.x, point.z) + 0.12, point.z);
+      dummy.rotation.set(0, point.rotation, 0);
+      dummy.scale.set(point.scale, visible ? point.scale * cropHeight : 0.0001, point.scale);
+      dummy.updateMatrix();
+      crops.setMatrixAt(index, dummy.matrix);
+      color.setHSL(growth >= 3 ? 0.125 + (index % 7) * 0.002 : 0.25 + (index % 7) * 0.004, growth >= 3 ? 0.66 : 0.42, growth >= 3 ? 0.45 + (index % 5) * 0.015 : 0.36 + (index % 5) * 0.018);
+      crops.setColorAt(index, color);
+    });
+    if (hasCrops) {
+      crops.instanceMatrix.needsUpdate = true;
+      crops.instanceColor.needsUpdate = true;
+    }
+  }
+
+  return { sync, cellFor };
 }
 
 function addInstanced(mesh, positions, colorFn) {
@@ -250,6 +328,7 @@ function vegetation(scene) {
   for (let i = 0; i < 2100 && treePositions.length < 480; i++) {
     const x = between(-480, 480), z = between(-470, 460);
     if (x > FIELD.minX - 32 && x < FIELD.maxX + 42 && z > FIELD.minZ - 42 && z < FIELD.maxZ + 38) continue;
+    if (x > -95 && x < 95 && z > 180 && z < 252) continue;
     if (Math.abs(x - roadX(z)) < 20) continue;
     if (z < -235 && z > -425 && x > -195 && x < 175) continue;
     const woodland = x < -190 || x > 180 || z > 240 || z < -290;
@@ -290,6 +369,7 @@ function vegetation(scene) {
   for (let i = 0; i < 1700 && bushes.length < 570; i++) {
     const x = between(-470, 470), z = between(-460, 455);
     if (x > FIELD.minX - 10 && x < FIELD.maxX + 10 && z > FIELD.minZ - 10 && z < FIELD.maxZ + 10) continue;
+    if (x > -95 && x < 95 && z > 180 && z < 252) continue;
     if (Math.abs(x - roadX(z)) < 9.6) continue;
     if (z < -240 && z > -410 && x > -190 && x < 155) continue;
     const s = between(0.5, 1.8);
@@ -318,6 +398,7 @@ function vegetation(scene) {
   for (let i = 0; i < 18000; i++) {
     const x = between(-250, 250), z = between(-245, 280);
     if (x > FIELD.minX - 4 && x < FIELD.maxX + 4 && z > FIELD.minZ - 4 && z < FIELD.maxZ + 4) continue;
+    if (x > -95 && x < 95 && z > 180 && z < 252) continue;
     if (Math.abs(x - roadX(z)) < 10) continue;
     const s = between(0.55, 1.2);
     grass.push({ x, y: heightAt(x, z), z, sx: s, sy: s, sz: s, rotation: random() * 6.28 });
@@ -359,16 +440,60 @@ function detailedRoadsideTrees(scene) {
 
 function grassTuftGeometry() {
   const vertices = [];
-  for (let blade = 0; blade < 5; blade++) {
-    const angle = blade * Math.PI * 2 / 5;
-    const x = Math.cos(angle) * 0.15, z = Math.sin(angle) * 0.15;
-    const height = 0.34 + (blade % 3) * 0.11;
-    vertices.push(x - 0.075, 0, z, x + 0.075, 0, z, x + Math.cos(angle) * 0.075, height, z + Math.sin(angle) * 0.075);
+  for (let blade = 0; blade < 8; blade++) {
+    const angle = blade * Math.PI * 2 / 8;
+    const x = Math.cos(angle) * 0.13, z = Math.sin(angle) * 0.13;
+    const height = 0.28 + (blade % 4) * 0.08;
+    const tipX = x + Math.cos(angle) * 0.19;
+    const tipZ = z + Math.sin(angle) * 0.19;
+    vertices.push(x - 0.045, 0, z, x + 0.045, 0, z, tipX, height, tipZ);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function wheatPatchGeometry() {
+  const vertices = [], uvs = [];
+  for (const angle of [0, Math.PI / 2, Math.PI / 4, -Math.PI / 4]) {
+    const x = Math.cos(angle) * 1.15, z = Math.sin(angle) * 1.15;
+    vertices.push(-x, 0, -z, x, 0, z, -x, 1.18, -z, x, 0, z, x, 1.18, z, -x, 1.18, -z);
+    uvs.push(0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function wheatSilhouetteTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  const stalkRandom = randomGenerator(42017);
+  context.strokeStyle = '#fff';
+  context.fillStyle = '#fff';
+  for (let stalk = 0; stalk < 39; stalk++) {
+    const base = stalkRandom() * 280 - 12;
+    const top = base + stalkRandom() * 18 - 9;
+    const tipY = 18 + stalkRandom() * 75;
+    context.lineWidth = 1 + stalkRandom() * 1.6;
+    context.beginPath(); context.moveTo(base, 256); context.quadraticCurveTo(base + 8, 151, top, tipY + 19); context.stroke();
+    context.beginPath(); context.ellipse(top, tipY + 10, 3.2 + stalkRandom() * 1.5, 13 + stalkRandom() * 8, 0, 0, Math.PI * 2); context.fill();
+    for (const side of [-1, 1]) {
+      context.lineWidth = 0.9;
+      context.beginPath(); context.moveTo(top, tipY + 11); context.lineTo(top + side * 9, tipY - 6); context.stroke();
+      context.beginPath(); context.moveTo(base + (top - base) * 0.58, 145); context.quadraticCurveTo(base + side * 18, 129, base + side * 27, 134); context.stroke();
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
 }
 
 function box(parent, width, height, depth, x, y, z, material) {
@@ -426,16 +551,6 @@ function house(scene, x, z, width, depth, height, paint, roofColor, rotation = 0
 }
 
 function town(scene) {
-  const walls = [0xbeb49b, 0xd0c4a8, 0xa8a58c, 0xc8bda3, 0xd6c8ab];
-  const roofs = [0x735d53, 0x8e6653, 0x62655b, 0x9a765c];
-  for (let i = 0; i < 26; i++) {
-    const row = Math.floor(i / 7), column = i % 7;
-    const x = -180 + column * 35 + between(-6, 6);
-    const z = -268 - row * 39 + between(-7, 7);
-    if (Math.abs(x - roadX(z)) < 13) continue;
-    const w = between(7.5, 13.5), d = between(8, 12), h = between(5.3, 8.2);
-    house(scene, x, z, w, d, h, walls[i % walls.length], roofs[(i + row) % roofs.length], between(-0.18, 0.18));
-  }
   // Church tower and pale stone nave give the distant settlement a readable silhouette.
   const church = new THREE.Group();
   const x = 98, z = -350;
@@ -451,8 +566,6 @@ function town(scene) {
 }
 
 function farmDetails(scene) {
-  // A small barn is the first landmark on John's land.
-  house(scene, 150, 125, 19, 30, 8.5, 0x9b8264, 0x6f5547, -0.18);
   const postMat = new THREE.MeshStandardMaterial({ color: 0x8c7656, roughness: 1 });
   const railMat = new THREE.MeshStandardMaterial({ color: 0x9d8662, roughness: 1 });
   for (const x of [-55, -42]) {
@@ -511,9 +624,11 @@ export function createWorld(scene, renderer) {
   lightAndSky(scene, renderer);
   terrain(scene);
   road(scene);
-  field(scene);
+  const fieldVisual = field(scene);
   vegetation(scene);
   town(scene);
   farmDetails(scene);
-  return { heightAt, roadX, field: FIELD };
+  const buildings = createBuildings(scene, heightAt);
+  const vehicles = createVehicles(scene, heightAt);
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles };
 }
