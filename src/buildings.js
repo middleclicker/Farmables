@@ -135,6 +135,9 @@ export const BUILDING_SITES = [
   { id: 'farmhouse', x: 38, z: 212, width: 17, depth: 18, height: 5.8, kind: 'home', wall: 'paleStone', roofType: 'tile' },
   { id: 'shed', x: -41, z: 212, width: 22, depth: 23, height: 6.2, kind: 'shed', wall: 'barn', roofType: 'slate' },
   { id: 'shop', x: -42, z: -265, width: 17, depth: 16, height: 6, kind: 'shop', wall: 'paleStone', roofType: 'tile', doorSide: 1 },
+  { id: 'bakery', x: -73, z: -308, width: 16, depth: 15, height: 5.8, kind: 'retail', wall: 'plaster', roofType: 'tile', doorSide: 1 },
+  { id: 'cafe', x: -149, z: -309, width: 15, depth: 15, height: 5.7, kind: 'cafe', wall: 'paleStone', roofType: 'slate', doorSide: 1 },
+  { id: 'pub', x: -69, z: -341, width: 18, depth: 16, height: 6.2, kind: 'cafe', wall: 'stone', roofType: 'slate', doorSide: 1 },
   { id: 'cottage_a', x: -182, z: -265, width: 13, depth: 14, height: 5.3, kind: 'home', wall: 'stone', roofType: 'slate', doorSide: 1 },
   { id: 'cottage_b', x: 11, z: -268, width: 14, depth: 13, height: 5.5, kind: 'home', wall: 'plaster', roofType: 'tile', doorSide: 1 },
   { id: 'cottage_c', x: 74, z: -300, width: 12, depth: 13, height: 5.2, kind: 'home', wall: 'stone', roofType: 'slate', doorSide: 1 },
@@ -212,6 +215,35 @@ function furnishing(group, kind, width, depth) {
     for (let i = 0; i < 5; i++) box(group, 0.72, 0.82, 0.56, -width / 2 + 1.5, 1.7, -7.1 + i * 0.9, i % 2 ? product.seed : product.lime);
     for (let i = 0; i < 4; i++) box(group, 0.75, 0.75, 0.75, width / 2 - 1.5, 1.68, -7 + i * 0.95, product.soil);
     sign(group, 'WORKSHOP  •  EQUIPMENT HIRE', depth / 2 - 1.05, 4.65, -1);
+  } else if (kind === 'retail' || kind === 'cafe') {
+    const counterZ = -depth / 2 + 2.1;
+    box(group, width - 3.8, 1.1, 1.25, 0, 0.57, counterZ, wood);
+    box(group, width - 3.8, 0.12, 1.44, 0, 1.15, counterZ, palette.wood);
+    block(0, counterZ, width - 3.8, 1.5);
+    if (kind === 'retail') {
+      for (const side of [-1, 1]) {
+        const x = side * (width / 2 - 1.35);
+        for (const y of [0.92, 1.72, 2.52]) box(group, 1.48, 0.13, 8.8, x, y, 0.6, palette.wood);
+        block(x, 0.6, 1.5, 9);
+        for (let i = 0; i < 7; i++) {
+          const z = -3.2 + i * 1.15;
+          box(group, 0.62, 0.37, 0.48, x, 1.17, z, i % 2 ? product.straw : product.seed);
+          box(group, 0.56, 0.45, 0.46, x, 2.01, z, i % 3 ? product.red : product.green);
+        }
+      }
+      for (let i = 0; i < 5; i++) box(group, 0.68, 0.4, 0.52, -2.3 + i * 1.15, 1.43, counterZ, product.straw);
+    } else {
+      for (const z of [0.3, 4.3]) for (const x of [-2.7, 2.7]) {
+        box(group, 1.7, 0.12, 1.7, x, 0.9, z, palette.wood);
+        box(group, 0.15, 0.83, 0.15, x, 0.44, z, wood);
+        for (const side of [-1, 1]) {
+          box(group, 0.74, 0.13, 0.64, x + side * 1.12, 0.47, z, product.green);
+          box(group, 0.71, 0.72, 0.1, x + side * 1.45, 0.82, z, wood);
+        }
+        block(x, z, 1.75, 1.75);
+      }
+      for (let i = 0; i < 7; i++) box(group, 0.37, 0.34, 0.38, -3 + i, 1.5, counterZ, i % 2 ? product.seed : product.straw);
+    }
   } else if (kind === 'shop') {
     const counterZ = -depth / 2 + 2.1;
     box(group, width - 4.2, 1.15, 1.35, 0, 0.59, counterZ, wood);
@@ -257,8 +289,17 @@ function furnishing(group, kind, width, depth) {
       box(group, 2.6, 1.05, 0.75, -width / 2 + 2.4, 0.55, depth / 2 - 2.1, palette.darkWood);
       box(group, 2.65, 0.1, 0.92, -width / 2 + 2.4, 1.1, depth / 2 - 2.1, palette.wood);
       box(group, 1.8, 1.3, 0.08, -width / 2 + 2.4, 2.25, depth / 2 - 0.55, product.straw);
-      sign(group, 'FARM CALENDAR', depth / 2 - 0.8, 4.5, -1);
+      // Filing cabinet and visible folders mark the farmhouse records corner.
+      const fileX = -width / 2 + 2.2, fileZ = -depth / 2 + 2.2;
+      box(group, 1.55, 1.75, 0.78, fileX, 0.89, fileZ, product.metal);
+      for (const y of [0.52, 1.08, 1.64]) {
+        box(group, 1.35, 0.025, 0.8, fileX, y, fileZ + 0.02, palette.wood);
+        box(group, 0.48, 0.06, 0.04, fileX, y - 0.24, fileZ - 0.41, product.brass);
+      }
+      for (let i = 0; i < 4; i++) box(group, 0.23, 0.31, 0.33, fileX - 0.48 + i * 0.3, 1.93, fileZ, i % 2 ? product.seed : product.lime);
+      sign(group, 'FARM OFFICE  •  RECORDS', depth / 2 - 0.8, 4.5, -1);
       block(-width / 2 + 2.4, depth / 2 - 2.1, 2.7, 1.2);
+      block(fileX, fileZ, 1.7, 0.9);
     }
   }
   return obstacles;
@@ -409,6 +450,9 @@ function building(scene, groundHeight, options) {
   if (id === 'farmhouse') sign(group, "JOHN'S FARM", frontZ, h - 1.05, doorSide);
   if (id === 'shed') sign(group, 'EQUIPMENT', frontZ, h - 0.78, doorSide);
   if (id === 'shop') sign(group, 'FARM SUPPLIES', frontZ, h - 1.05, doorSide);
+  if (id === 'bakery') sign(group, 'VILLAGE BAKERY', frontZ, h - 1.05, doorSide);
+  if (id === 'cafe') sign(group, 'THE GREEN CAFE', frontZ, h - 1.05, doorSide);
+  if (id === 'pub') sign(group, 'THE OLD PLOUGH', frontZ, h - 1.05, doorSide);
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshStandardMaterial({ color: 0xf6dfac, emissive: 0xffd99d, emissiveIntensity: 1.5 }));
   bulb.position.set(0, h - 0.65, 0);
   group.add(bulb);

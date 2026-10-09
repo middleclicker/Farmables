@@ -180,6 +180,22 @@ try {
     options.appendChild(button);
   }
 
+  function showDocument(reference, heading, rows, note) {
+    const sheet = document.createElement('article');
+    sheet.className = 'document-sheet';
+    const ref = document.createElement('div'); ref.className = 'document-reference'; ref.textContent = reference;
+    const title = document.createElement('h3'); title.textContent = heading;
+    const table = document.createElement('dl');
+    rows.forEach(([label, value]) => {
+      const term = document.createElement('dt'); term.textContent = label;
+      const description = document.createElement('dd'); description.textContent = value;
+      table.append(term, description);
+    });
+    const finding = document.createElement('p'); finding.className = 'document-finding'; finding.textContent = note;
+    sheet.append(ref, title, table, finding);
+    options.append(sheet);
+  }
+
   function perform(operation, success) {
     if (operation()) sync(success);
     else toast('Not available yet, or you need more coins.');
@@ -192,6 +208,7 @@ try {
     $('#panel-kicker').textContent = `${dateLabel(farm.day)} · ◈ ${farm.coins.toLocaleString()}`;
     if (kind === 'farmhouse') {
       $('#panel-title').textContent = 'Farmhouse';
+      addOption('Important documents', 'Soil analyses, holding details, and equipment records.', () => openPanel('documents'));
       if (farm.timeOfDay >= 19 || farm.timeOfDay < 6) addOption('Sleep until morning', 'The farm day resumes at 07:00.', () => {
         if (farm.timeOfDay >= 19) farm.day++;
         farm.timeOfDay = 7;
@@ -202,7 +219,7 @@ try {
         addOption('Leave the crop untreated', 'The wheat continues growing with a smaller yield.', () => perform(() => decideFertilizer(farm, false), 'The wheat continues growing.'));
       } else if (['test_pending', 'ready_to_sow', 'growing', 'harvested'].includes(farm.phase)) {
         if (farm.phase === 'test_pending' && farm.day >= farm.soilReportDay) {
-          addOption('Read delivered soil report', 'Lab finding: pH 5.8. The field needs lime.', () => perform(() => readSoilReport(farm), 'Soil report: pH 5.8. Mow before spreading lime.'));
+          addOption('Open delivered soil analysis', 'The laboratory report has arrived for filing.', () => openPanel(`soil:${farm.soilReportDay}`));
         } else {
           const label = farm.phase === 'test_pending' ? `Advance to lab delivery · ${Math.max(1, farm.soilReportDay - farm.day)} days` : farm.phase === 'ready_to_sow' ? 'Advance to sowing window' : farm.phase === 'harvested' ? 'Begin next farm year' : 'Advance to next event';
           addOption(label, farm.phase === 'harvested' ? 'Keep your coins and any tractor you bought.' : 'The calendar moves past quiet days.', () => {
@@ -213,6 +230,50 @@ try {
       } else {
         addOption(phaseLabel(farm), objective(), () => closePanel(), true);
       }
+    } else if (kind === 'documents') {
+      $('#panel-title').textContent = 'Important documents';
+      addOption('Farm holding record', 'John’s Farm · starter field and buildings.', () => openPanel('holding'));
+      const reports = farm.documents.filter(document => document.type === 'soil').slice().reverse();
+      reports.forEach(report => addOption(`${report.reviewed ? 'Filed' : farm.day >= report.deliveredDay ? 'New' : 'At laboratory'} · Soil analysis ${report.id}`,
+        `${dateLabel(report.deliveredDay)} · ${farm.day >= report.deliveredDay ? 'Field pH and recommendation' : 'Awaiting delivery'}`,
+        () => openPanel(`soil:${report.deliveredDay}`), farm.day < report.deliveredDay));
+      const equipment = farm.documents.filter(document => document.type === 'equipment').slice().reverse();
+      equipment.forEach(record => addOption(`${record.title} · ${record.id}`, `${dateLabel(record.day)} · ◈ ${record.amount}`, () => openPanel(`equipment:${record.id}`)));
+      addOption('Back to farmhouse', 'Return to the calendar.', () => openPanel('farmhouse'));
+    } else if (kind === 'holding') {
+      $('#panel-title').textContent = 'Farm holding record';
+      showDocument('FARM RECORD · HOLDING 001', 'John’s Farm', [
+        ['Holding', 'John’s Farm'], ['Primary field', 'The starter field beside the main road'],
+        ['Buildings', 'Farmhouse and equipment shed'], ['Current crop', 'Winter wheat'],
+        ['Farm year', String(farm.harvestCount + 1)],
+      ], 'Keep soil reports and machinery agreements with this holding record.');
+      addOption('Back to documents', 'Return to the filing cabinet.', () => openPanel('documents'));
+    } else if (kind.startsWith('soil:')) {
+      const deliveredDay = Number(kind.slice(5));
+      const report = farm.documents.find(document => document.type === 'soil' && document.deliveredDay === deliveredDay);
+      $('#panel-title').textContent = 'Soil analysis';
+      if (report && farm.day >= report.deliveredDay) {
+        showDocument(`FIELD LABORATORY · ${report.id}`, 'Soil analysis report', [
+          ['Sample location', 'John’s Farm · starter field'],
+          ['Sample collected', dateLabel(report.sampledDay)],
+          ['Report issued', dateLabel(report.deliveredDay)],
+          ['Measured pH', `${report.ph.toFixed(1)} · acidic`],
+          ['Target before sowing', 'Correct soil acidity'],
+          ['Nutrients / organic matter', 'Not analysed in this test'],
+        ], 'Recommendation: mow the overgrowth, spread agricultural lime evenly, then cultivate before drilling winter wheat. Recheck soil pH in a later season.');
+        if (farm.phase === 'test_pending' && farm.soilReportDay === deliveredDay) {
+          addOption('File report and continue', 'The field can now be mown and limed.', () => perform(() => readSoilReport(farm), 'Report filed. Mow the overgrowth before spreading lime.'));
+        }
+      }
+      addOption('Back to documents', 'Return to the filing cabinet.', () => openPanel('documents'));
+    } else if (kind.startsWith('equipment:')) {
+      const record = farm.documents.find(document => document.type === 'equipment' && document.id === kind.slice(10));
+      $('#panel-title').textContent = 'Equipment record';
+      if (record) showDocument(`FARM EQUIPMENT · ${record.id}`, record.title, [
+        ['Holding', 'John’s Farm'], ['Recorded', dateLabel(record.day)],
+        ['Amount paid', `◈ ${record.amount}`], ['Arrangement', record.terms],
+      ], 'Filed with the farm equipment records.');
+      addOption('Back to documents', 'Return to the filing cabinet.', () => openPanel('documents'));
     } else if (kind === 'shed') {
       $('#panel-title').textContent = 'Equipment shed';
       if (!farm.tractorOwned && !farm.tractorRented) {
@@ -252,9 +313,10 @@ try {
       });
       addOption('Keep playing', 'Return to the farm.', closePanel);
     } else {
-      $('#panel-title').textContent = 'Village cottage';
+      const venues = { bakery: ['Village bakery', 'Help restock the morning bread'], cafe: ['The Green Cafe', 'Help set up the garden tables'], pub: ['The Old Plough', 'Help bring in the deliveries'] };
+      $('#panel-title').textContent = venues[kind]?.[0] || 'Village cottage';
       const completed = farm.neighborJobs?.includes(kind);
-      addOption(completed ? 'Garden work complete' : 'Help with the garden · +◈ 65', 'A small local job while the farm develops.', () => perform(() => helpNeighbor(farm, kind), 'Garden work complete · +◈ 65.'), completed);
+      addOption(completed ? 'Work complete' : `${venues[kind]?.[1] || 'Help with the garden'} · +◈ 65`, 'A local job while the farm develops.', () => perform(() => helpNeighbor(farm, kind), 'Village work complete · +◈ 65.'), completed);
     }
   }
 
@@ -289,7 +351,7 @@ try {
       Math.hypot(player.x - item.door.x, player.z - item.door.z) < 7 ||
       (item.contains(player.x, player.z) && Math.hypot(player.x - item.interact.x, player.z - item.interact.z) < 8));
     if (building) {
-      const label = building.id === 'farmhouse' ? 'Farm calendar' : building.id === 'shed' ? 'Equipment shed' : building.id === 'shop' ? 'Village supplies' : 'Visit cottage';
+      const label = building.id === 'farmhouse' ? 'Farmhouse' : building.id === 'shed' ? 'Equipment shed' : building.id === 'shop' ? 'Village supplies' : ['bakery', 'cafe', 'pub'].includes(building.id) ? 'Enter shop' : 'Visit cottage';
       return { label, run: () => openPanel(building.id) };
     }
     return null;
@@ -474,6 +536,17 @@ try {
       if (z === -500) context.moveTo(x, y); else context.lineTo(x, y);
     }
     context.strokeStyle = '#8c9183'; context.lineWidth = 6; context.stroke();
+    if (subject.z < -105) {
+      context.fillStyle = '#628358';
+      context.fillRect(px(-80), pz(-251), 66 * scale, 50 * scale);
+      context.fillStyle = '#acaa91';
+      context.fillRect(px(-50), pz(-248), 5 * scale, 44 * scale);
+      context.fillRect(px(-77), pz(-229), 60 * scale, 5 * scale);
+      context.strokeStyle = '#777e76'; context.lineWidth = 3;
+      for (const z of [-284, -325, -369]) {
+        context.beginPath(); context.moveTo(px(-188), pz(z)); context.lineTo(px(52), pz(z)); context.stroke();
+      }
+    }
     for (const building of world.buildings.list) {
       context.fillStyle = building.id === 'farmhouse' ? '#e7c881' : building.id === 'shed' ? '#b8b0a0' : '#d3c7a7';
       context.fillRect(px(building.x) - 2.5, pz(building.z) - 2.5, 5, 5);
@@ -564,6 +637,7 @@ try {
       }
     }
     world.buildings.update(subject);
+    world.village.update(elapsed, subject);
     world.atmosphere.update(farm, delta, subject);
     target.lerp(desired.set(subject.x, subject.y + subjectHeight, subject.z), 1 - Math.exp(-delta * 7));
     const horizontal = distance * Math.cos(cameraPitch);

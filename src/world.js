@@ -7,6 +7,10 @@ import soilDiffuse from '../assets/farm_soil_diff.webp';
 import soilNormal from '../assets/farm_soil_normal.webp';
 import asphaltDiffuse from '../assets/worn_asphalt_diff.webp';
 import asphaltNormal from '../assets/worn_asphalt_normal.webp';
+import villageStoneDiffuse from '../assets/materials/plaster_stone_wall_02_diff.webp';
+import villageStoneNormal from '../assets/materials/plaster_stone_wall_02_normal.webp';
+import villageRoofDiffuse from '../assets/materials/roof_slates_02_diff.webp';
+import villageRoofNormal from '../assets/materials/roof_slates_02_normal.webp';
 import oakTreeUrl from '../assets/oak-tree.glb?url';
 import birchTreeUrl from '../assets/birch-tree.glb?url';
 import { FIELD_COLUMNS, FIELD_ROWS } from './farming.js';
@@ -716,6 +720,9 @@ function gableRoof(width, depth, rise, material) {
     0,rise,d, w,0,-d, w,0,d,
   ]);
   geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  const uvs = [];
+  for (let i = 0; i < vertices.length; i += 3) uvs.push((vertices[i] + w) / (2 * w) * 2, (vertices[i + 2] + d) / (2 * d) * 3);
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
   const roof = new THREE.Mesh(geometry, material);
   roof.castShadow = true;
@@ -723,12 +730,19 @@ function gableRoof(width, depth, rise, material) {
   return roof;
 }
 
-function house(scene, x, z, width, depth, height, paint, roofColor, rotation = 0) {
+const villageStoneMap = surfaceTexture(villageStoneDiffuse, 1, 1, true);
+const villageStoneNormalMap = surfaceTexture(villageStoneNormal, 1, 1);
+const villageRoofMap = surfaceTexture(villageRoofDiffuse, 1, 1, true);
+const villageRoofNormalMap = surfaceTexture(villageRoofNormal, 1, 1);
+
+function house(scene, x, z, width, depth, height, paint, roofColor, rotation = 0, obstacles = null) {
   const group = new THREE.Group();
   group.position.set(x, heightAt(x, z), z);
   group.rotation.y = rotation;
-  const wall = new THREE.MeshStandardMaterial({ color: paint, roughness: 1 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.98, side: THREE.DoubleSide });
+  const wall = new THREE.MeshStandardMaterial({ map: villageStoneMap, normalMap: villageStoneNormalMap,
+    color: new THREE.Color(paint).lerp(new THREE.Color(0xffffff), 0.55), roughness: 1 });
+  const roofMat = new THREE.MeshStandardMaterial({ map: villageRoofMap, normalMap: villageRoofNormalMap,
+    color: new THREE.Color(roofColor).lerp(new THREE.Color(0xffffff), 0.48), roughness: 0.98, side: THREE.DoubleSide });
   const glass = new THREE.MeshStandardMaterial({ color: 0x506a70, roughness: 0.22, metalness: 0.13 });
   const frame = new THREE.MeshStandardMaterial({ color: 0xe1ddc7, roughness: 1 });
   const door = new THREE.MeshStandardMaterial({ color: 0x514333, roughness: 1 });
@@ -749,21 +763,161 @@ function house(scene, x, z, width, depth, height, paint, roofColor, rotation = 0
     }
   }
   scene.add(group);
+  if (obstacles) for (let ox = -width / 2; ox <= width / 2; ox += 2) for (let oz = -depth / 2; oz <= depth / 2; oz += 2) {
+    const px = x + ox * Math.cos(rotation) + oz * Math.sin(rotation);
+    const pz = z - ox * Math.sin(rotation) + oz * Math.cos(rotation);
+    obstacles.add(px, pz, 1.05);
+  }
 }
 
-function town(scene) {
+function town(scene, obstacles) {
   // Church tower and pale stone nave give the distant settlement a readable silhouette.
   const church = new THREE.Group();
   const x = 98, z = -350;
   church.position.set(x, heightAt(x, z), z);
-  const stone = new THREE.MeshStandardMaterial({ color: 0xbab39b, roughness: 1 });
-  const slate = new THREE.MeshStandardMaterial({ color: 0x5c6865, roughness: 1 });
+  const stone = new THREE.MeshStandardMaterial({ map: villageStoneMap, normalMap: villageStoneNormalMap, color: 0xe2dccb, roughness: 1 });
+  const slate = new THREE.MeshStandardMaterial({ map: villageRoofMap, normalMap: villageRoofNormalMap, color: 0xd0d5cf, roughness: 1 });
   box(church, 13, 9, 28, 0, 4.5, 0, stone);
   const roof = gableRoof(13, 28, 5, slate); roof.position.y = 9; church.add(roof);
   box(church, 8, 19, 8, 0, 9.5, 18, stone);
   const steeple = new THREE.Mesh(new THREE.ConeGeometry(6.2, 9, 4), slate);
   steeple.position.set(0, 23, 18); steeple.rotation.y = Math.PI / 4; steeple.castShadow = true; church.add(steeple);
   scene.add(church);
+  for (let ox = -7; ox <= 7; ox += 2.2) for (let oz = -14; oz <= 22; oz += 2.2) obstacles.add(x + ox, z + oz, 1.2);
+
+  // More homes continue the village beyond the enterable shops and cottages.
+  const homes = [
+    [-182, -402, 13, 14, 5.6, 0xb6ac91, 0x555955],
+    [-42, -409, 14, 14, 5.7, 0xc9bca0, 0x675a50],
+    [12, -432, 14, 15, 6.2, 0xbeb9a6, 0x5a645f],
+    [72, -426, 15, 14, 5.9, 0xb5a88c, 0x666159],
+    [-182, -210, 13, 14, 5.4, 0xc9c0a5, 0x5a665f],
+    [12, -207, 14, 14, 5.8, 0xc3ad91, 0x66635a],
+  ];
+  homes.forEach(site => house(scene, ...site, 0, obstacles));
+
+  // The settlement has its own surfaced lanes, pavements and pedestrian scale.
+  const pavingTexture = makeNoiseTexture({ r: 169, g: 159, b: 140, variation: 25 }, 256, 90412);
+  pavingTexture.repeat.set(3, 8);
+  const paving = new THREE.MeshStandardMaterial({ map: pavingTexture, roughness: 1, side: THREE.DoubleSide });
+  const street = new THREE.MeshStandardMaterial({
+    map: surfaceTexture(asphaltDiffuse, 3, 2, true), color: 0xc4bfb0, roughness: 1, side: THREE.DoubleSide,
+  });
+  for (const [z0, z1, west, east] of [[-288, -280, -188, 72], [-329, -321, -187, 48], [-373, -365, -190, 52]]) {
+    const lane = new THREE.Mesh(patchGeometry(west, east, z0, z1, 22, 2, 0.18), street);
+    lane.receiveShadow = true; scene.add(lane);
+    for (const edge of [z0 - 2.5, z1 + 2.5]) {
+      const walk = new THREE.Mesh(patchGeometry(west, east, edge - 1.6, edge + 1.6, 22, 2, 0.2), paving);
+      walk.receiveShadow = true; scene.add(walk);
+    }
+  }
+  for (const side of [-1, 1]) {
+    const walk = stripAlongZ(scene, z => roadX(z) + side * 7.1, -430, -205, 2.9, paving, 0.2, 42);
+    walk.receiveShadow = true;
+  }
+  const streetIron = new THREE.MeshStandardMaterial({ color: 0x4e5552, metalness: 0.47, roughness: 0.47 });
+  for (const z of [-409, -347, -296, -235]) for (const side of [-1, 1]) {
+    const lx = roadX(z) + side * 9.4, ly = heightAt(lx, z);
+    const lampPost = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 5.6, 8), streetIron);
+    lampPost.position.set(lx, ly + 2.8, z); lampPost.castShadow = true; scene.add(lampPost);
+    box(scene, 1.3, 0.1, 0.1, lx - side * 0.6, ly + 5.45, z, streetIron);
+    const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), new THREE.MeshStandardMaterial({ color: 0xffe5af, emissive: 0xffd985, emissiveIntensity: 0.8 }));
+    lantern.position.set(lx - side * 1.15, ly + 5.28, z); scene.add(lantern);
+    obstacles.add(lx, z, 0.28);
+  }
+  const boxHedge = new THREE.MeshStandardMaterial({ color: 0x597847, roughness: 1 });
+  for (const z of [-227, -254, -303, -339, -391, -416]) for (const x of [-206, -157, -17, 52]) {
+    if (Math.abs(x - roadX(z)) < 17) continue;
+    const shrub = new THREE.Mesh(new THREE.IcosahedronGeometry(1.25, 1), boxHedge);
+    shrub.scale.set(1.2, 0.72, 0.85);
+    shrub.position.set(x, heightAt(x, z) + 0.78, z);
+    scene.add(shrub); obstacles.add(x, z, 0.92);
+  }
+
+  const gravel = new THREE.MeshStandardMaterial({ color: 0xb8ad8d, roughness: 1, side: THREE.DoubleSide });
+  const northPath = new THREE.Mesh(patchGeometry(-50, -45, -248, -204, 2, 12, 0.18), gravel);
+  const crossPath = new THREE.Mesh(patchGeometry(-77, -17, -229, -224, 16, 2, 0.18), gravel);
+  scene.add(northPath, crossPath);
+  const parkWood = new THREE.MeshStandardMaterial({ color: 0x765b40, roughness: 0.95 });
+  const benchIron = new THREE.MeshStandardMaterial({ color: 0x4b5551, metalness: 0.4, roughness: 0.6 });
+  const parkLeaves = [0x6a8858, 0x79945a, 0x56794d].map(color => new THREE.MeshStandardMaterial({ color, roughness: 1 }));
+  for (const [tx, tz, size] of [[-70, -211, 1.1], [-24, -211, 0.9], [-70, -241, 0.98], [-23, -241, 1.05], [-33, -233, 0.77]]) {
+    const base = heightAt(tx, tz);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.27 * size, 0.38 * size, 5 * size, 8), parkWood);
+    trunk.position.set(tx, base + 2.5 * size, tz); trunk.castShadow = true; scene.add(trunk);
+    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(2.15 * size, 1), parkLeaves[Math.abs(tx + tz) % 3]);
+    crown.position.set(tx, base + 5.7 * size, tz); crown.castShadow = true; scene.add(crown);
+    obstacles.add(tx, tz, 0.49 * size);
+  }
+  for (const [bx, bz] of [[-61, -217], [-33, -217], [-62, -238], [-32, -238]]) {
+    const bench = new THREE.Group(); bench.position.set(bx, heightAt(bx, bz), bz);
+    box(bench, 2.5, 0.13, 0.64, 0, 0.62, 0, parkWood);
+    box(bench, 2.5, 0.58, 0.12, 0, 1.02, 0.31, parkWood);
+    for (const side of [-1, 1]) box(bench, 0.14, 0.62, 0.55, side * 1.0, 0.33, 0, benchIron);
+    scene.add(bench); obstacles.add(bx, bz, 1.38);
+  }
+  const flowerColors = [0xb5a154, 0xa87568, 0xdfcf84];
+  const stemMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.018, 0.027, 0.28, 5), parkLeaves[0], 38);
+  const flowerMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 0), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }), 38);
+  for (let i = 0; i < 38; i++) {
+    const fx = -73 + (i % 10) * 5.3, fz = -249 + Math.floor(i / 10) * 1.7;
+    const base = heightAt(fx, fz);
+    dummy.position.set(fx, base + 0.18, fz); dummy.scale.setScalar(1); dummy.rotation.set(0, 0, 0); dummy.updateMatrix(); stemMesh.setMatrixAt(i, dummy.matrix);
+    dummy.position.y = base + 0.34; dummy.updateMatrix(); flowerMesh.setMatrixAt(i, dummy.matrix);
+    flowerMesh.setColorAt(i, new THREE.Color(flowerColors[i % 3]));
+  }
+  stemMesh.instanceMatrix.needsUpdate = true; flowerMesh.instanceMatrix.needsUpdate = true;
+  scene.add(stemMesh, flowerMesh);
+
+  const people = [];
+  const coatColors = [0x596c48, 0x5b6877, 0x8a6954, 0x8a8064, 0x6e5b68, 0x485d60];
+  const skin = new THREE.MeshStandardMaterial({ color: 0xc39b7d, roughness: 1 });
+  const trousers = new THREE.MeshStandardMaterial({ color: 0x3f4745, roughness: 1 });
+  const hair = new THREE.MeshStandardMaterial({ color: 0x493d33, roughness: 1 });
+  for (let i = 0; i < 9; i++) {
+    const person = new THREE.Group();
+    const coat = new THREE.MeshStandardMaterial({ color: coatColors[i % coatColors.length], roughness: 1 });
+    const jacket = new THREE.Mesh(new THREE.CapsuleGeometry(0.29, 0.39, 5, 10), coat);
+    jacket.position.set(0, 1.28, 0); jacket.castShadow = true; person.add(jacket);
+    box(person, 0.42, 0.12, 0.3, 0, 1.01, 0, trousers);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 7), skin);
+    head.position.set(0, 1.84, 0); person.add(head);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.47), hair);
+    cap.position.copy(head.position); person.add(cap);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.055, 7, 6), skin);
+    nose.position.set(0, 1.81, -0.19); person.add(nose);
+    const legs = [], arms = [];
+    for (const side of [-1, 1]) {
+      const leg = new THREE.Group(); leg.position.set(side * 0.15, 0.91, 0); person.add(leg);
+      const legMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.74, 8), trousers);
+      legMesh.position.y = -0.38; leg.add(legMesh);
+      box(leg, 0.21, 0.13, 0.3, 0, -0.8, -0.05, hair);
+      legs.push(leg);
+      const arm = new THREE.Group(); arm.position.set(side * 0.35, 1.58, 0); person.add(arm);
+      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.6, 8), coat);
+      sleeve.position.y = -0.32; arm.add(sleeve);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), skin);
+      hand.position.y = -0.65; arm.add(hand);
+      arms.push(arm);
+    }
+    scene.add(person);
+    people.push({ person, legs, arms, side: i % 2 ? 1 : -1, phase: i * 0.63, pace: 0.67 + i * 0.07, park: i >= 6 });
+  }
+  return {
+    update(time, player) {
+      people.forEach(({ person, legs, arms, side, phase, pace, park }, index) => {
+        const cycle = time * pace + phase;
+        const zPos = park ? -225 + Math.sin(cycle * 0.36) * 11 : -330 + Math.sin(cycle * 0.2) * 84;
+        const xPos = park ? -47 + Math.cos(cycle * 0.36) * (index === 8 ? 9 : 15) : roadX(zPos) + side * 7.1;
+        person.position.set(xPos, heightAt(xPos, zPos), zPos);
+        person.rotation.y = park ? cycle * 0.36 + Math.PI / 2 : Math.cos(cycle * 0.2) > 0 ? 0 : Math.PI;
+        person.visible = Math.hypot(player.x - xPos, player.z - zPos) < 260;
+        const swing = Math.sin(cycle * 7.2) * 0.38;
+        legs[0].rotation.x = swing; legs[1].rotation.x = -swing;
+        arms[0].rotation.x = -swing * 0.65; arms[1].rotation.x = swing * 0.65;
+      });
+    },
+  };
 }
 
 function farmDetails(scene, obstacles) {
@@ -836,10 +990,10 @@ export function createWorld(scene, renderer) {
   road(scene);
   const fieldVisual = field(scene);
   const vegetationObstacles = vegetation(scene);
-  town(scene);
+  const village = town(scene, vegetationObstacles);
   farmDetails(scene, vegetationObstacles);
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
   const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere };
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere, village };
 }

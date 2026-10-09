@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import johnModelUrl from '../assets/john-farmer.glb?url';
+import johnModelUrl from '../assets/john-farmer-neutral.glb?url';
 
 const material = color => new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
 

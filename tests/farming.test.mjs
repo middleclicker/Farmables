@@ -37,6 +37,8 @@ test('winter wheat progresses through sample delivery, metre-scale field passes,
   assert.equal(farm.phase, 'test_pending');
   assert.equal(readSoilReport(farm), true);
   assert.equal(farm.phase, 'mow');
+  assert.deepEqual(farm.documents.filter(document => document.type === 'soil').map(document =>
+    [document.sampledDay, document.deliveredDay, document.ph, document.reviewed]), [[0, 2, 5.8, true]]);
   assert.equal(acquireTractor(farm, 'rent'), true);
   assert.equal(rentTool(farm, 'mow'), true);
   const first = workFieldSwath(farm, -20, 0, -20, 12, 6);
@@ -73,6 +75,8 @@ test('winter wheat progresses through sample delivery, metre-scale field passes,
   assert.equal(farm.coins, beforeHarvest + farm.lastYield);
   advanceToNextEvent(farm);
   assert.equal(farm.phase, 'clear');
+  assert.ok(farm.documents.some(document => document.type === 'soil' && document.reviewed));
+  assert.ok(farm.documents.some(document => document.type === 'equipment' && document.title === 'Tractor hire'));
 });
 
 test('work mask survives save and old cell saves migrate', () => {
@@ -113,4 +117,24 @@ test('an older save with two cleared gate patches resumes at soil sampling', () 
   previousSave.accessCleared = 2;
   const storage = { getItem: () => JSON.stringify(previousSave) };
   assert.equal(loadFarm(storage).phase, 'test');
+});
+
+test('delivered soil reports remain filed through saving and old saves gain an archive entry', () => {
+  const farm = newFarm();
+  clearAccess(farm); clearAccess(farm); sampleSoil(farm); sendSoilSample(farm);
+  const storage = adapter();
+  saveFarm(farm, storage);
+  const pending = loadFarm(storage);
+  assert.equal(pending.documents.length, 1);
+  assert.equal(pending.documents[0].reviewed, false);
+  advanceToNextEvent(pending);
+  readSoilReport(pending);
+  saveFarm(pending, storage);
+  assert.equal(loadFarm(storage).documents[0].reviewed, true);
+
+  const legacy = { ...newFarm(), version: 2, phase: 'lime', soilReportDay: 8 };
+  delete legacy.documents;
+  const upgraded = loadFarm({ getItem: () => JSON.stringify(legacy) });
+  assert.equal(upgraded.documents[0].deliveredDay, 8);
+  assert.equal(upgraded.documents[0].reviewed, true);
 });

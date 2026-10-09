@@ -26,7 +26,7 @@ const FIELD_PHASES = new Set(['mow', 'lime', 'cultivate', 'sow', 'harvest']);
 
 export function newFarm() {
   return {
-    version: 2,
+    version: 3,
     day: 0,
     timeOfDay: 8.5,
     seasonStartDay: 0,
@@ -46,6 +46,8 @@ export function newFarm() {
     workCount: 0,
     workRevision: 0,
     soilReportDay: null,
+    soilSampleDay: null,
+    documents: [],
     harvestCount: 0,
     lastYield: 0,
     neighborJobs: [],
@@ -56,14 +58,14 @@ export function newFarm() {
 export function loadFarm(storage) {
   try {
     const stored = JSON.parse(storage.getItem('farmables-save-v1'));
-    if (![1, 2].includes(stored?.version) || !Array.isArray(stored.coverage) || stored.coverage.length !== FIELD_CELLS) return newFarm();
+    if (![1, 2, 3].includes(stored?.version) || !Array.isArray(stored.coverage) || stored.coverage.length !== FIELD_CELLS) return newFarm();
     if (!Number.isFinite(stored.coins) || !Number.isFinite(stored.day)) return newFarm();
     const farm = { ...newFarm(), ...stored, coverage: stored.coverage.map(Boolean) };
     if (!farm.positions || !['john', 'tractor', 'combine'].every(key =>
       Array.isArray(farm.positions[key]) && farm.positions[key].length >= 2 && farm.positions[key].every(Number.isFinite))) farm.positions = newFarm().positions;
     if (!Array.isArray(farm.neighborJobs)) farm.neighborJobs = [];
+    if (!Array.isArray(farm.documents)) farm.documents = [];
     if (stored.version === 1) {
-      farm.version = 2;
       farm.workMask = '';
       farm.workCount = 0;
       const width = (FIELD_BOUNDS.maxX - FIELD_BOUNDS.minX) / FIELD_COLUMNS;
@@ -77,6 +79,10 @@ export function loadFarm(storage) {
     }
     if (!Number.isFinite(farm.timeOfDay) || farm.timeOfDay < 0 || farm.timeOfDay >= 24) farm.timeOfDay = 8.5;
     if (farm.phase === 'test_pending' && !Number.isFinite(farm.soilReportDay)) farm.soilReportDay = farm.day + 2;
+    if (Number.isFinite(farm.soilReportDay) && !farm.documents.some(document => document.type === 'soil' && document.deliveredDay === farm.soilReportDay)) {
+      farm.documents.push({ type: 'soil', id: `SOIL-${String(farm.harvestCount + 1).padStart(3, '0')}`, sampledDay: farm.soilReportDay - 2, deliveredDay: farm.soilReportDay, reviewed: farm.phase !== 'test_pending', ph: 5.8 });
+    }
+    farm.version = 3;
     if (farm.phase === 'clear' && farm.accessCleared >= 2) farm.phase = 'test';
     return farm;
   } catch {
@@ -116,11 +122,15 @@ export function sendSoilSample(state) {
   if (state.phase !== 'test_collected' || !spend(state, PRICES.soilTest)) return false;
   state.phase = 'test_pending';
   state.soilReportDay = state.day + 2;
+  state.soilSampleDay = state.day;
+  state.documents.push({ type: 'soil', id: `SOIL-${String(state.harvestCount + 1).padStart(3, '0')}`, sampledDay: state.day, deliveredDay: state.soilReportDay, reviewed: false, ph: 5.8 });
   return true;
 }
 
 export function readSoilReport(state) {
   if (state.phase !== 'test_pending' || state.day < state.soilReportDay) return false;
+  const report = state.documents.find(document => document.type === 'soil' && document.deliveredDay === state.soilReportDay);
+  if (report) report.reviewed = true;
   state.phase = 'mow';
   return true;
 }
@@ -130,10 +140,12 @@ export function acquireTractor(state, kind) {
   if (kind === 'buy' && spend(state, PRICES.tractorBuy)) {
     state.tractorOwned = true;
     state.tractorRented = false;
+    state.documents.push({ type: 'equipment', id: `EQ-${state.day}-${state.documents.length + 1}`, day: state.day, title: 'Tractor purchase', amount: PRICES.tractorBuy, terms: 'Owned by John’s Farm.' });
     return true;
   }
   if (kind === 'rent' && !state.tractorRented && spend(state, PRICES.tractorRent)) {
     state.tractorRented = true;
+    state.documents.push({ type: 'equipment', id: `EQ-${state.day}-${state.documents.length + 1}`, day: state.day, title: 'Tractor hire', amount: PRICES.tractorRent, terms: 'Returned after sowing.' });
     return true;
   }
   return false;
@@ -157,6 +169,7 @@ export function rentTool(state, tool) {
     if (state.combineRented || !spend(state, PRICES.combine)) return false;
     state.combineRented = true;
     state.tool = tool;
+    state.documents.push({ type: 'equipment', id: `EQ-${state.day}-${state.documents.length + 1}`, day: state.day, title: 'Combine hire', amount: PRICES.combine, terms: 'Returned after harvest.' });
     return true;
   }
   if (!state.tractorOwned && !state.tractorRented) return false;
@@ -165,6 +178,7 @@ export function rentTool(state, tool) {
   const cost = { mow: PRICES.mower, lime: PRICES.spreader, cultivate: PRICES.cultivator, sow: PRICES.drill }[tool];
   if (!spend(state, cost)) return false;
   state.tool = tool;
+  state.documents.push({ type: 'equipment', id: `EQ-${state.day}-${state.documents.length + 1}`, day: state.day, title: `${{ mow: 'Mower', lime: 'Lime spreader', cultivate: 'Cultivator', sow: 'Seed drill' }[tool]} hire`, amount: cost, terms: 'Hired for the current field operation.' });
   return true;
 }
 
@@ -232,10 +246,12 @@ export function advanceToNextEvent(state) {
     const harvestCount = state.harvestCount;
     const coins = state.coins;
     const tractorOwned = state.tractorOwned;
+    const documents = state.documents;
     Object.assign(state, newFarm());
     state.harvestCount = harvestCount;
     state.coins = coins;
     state.tractorOwned = tractorOwned;
+    state.documents = documents;
     state.day = 365 * harvestCount;
     state.seasonStartDay = state.day;
     return 'A new farm year begins.';
@@ -252,7 +268,7 @@ export function decideFertilizer(state, useIt) {
 }
 
 export function helpNeighbor(state, id) {
-  if (!id.startsWith('cottage_') || state.neighborJobs.includes(id)) return false;
+  if (!(id.startsWith('cottage_') || ['bakery', 'cafe', 'pub'].includes(id)) || state.neighborJobs.includes(id)) return false;
   state.neighborJobs.push(id);
   state.coins += 65;
   return true;

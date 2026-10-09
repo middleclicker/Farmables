@@ -1,0 +1,19 @@
+John farmer neutral texture variant
+
+The model, rig and animations are from assets/john-farmer.glb, whose source
+and license are recorded in assets/john-license.txt. The embedded base-color
+texture in john-farmer-neutral.glb was edited using the built-in imagegen tool
+and resized to the original atlas dimensions before embedding. The original
+asset remains available in the repository for comparison and rollback.
+
+Imagegen prompt:
+Use case: precise-object-edit. Asset type: 1024x1024 UV color texture atlas
+for a rigged 3D farmer character. Edit target: the attached texture atlas.
+Primary request: change ONLY the large bright toothy smiles visible within
+human face UV islands into subtle closed relaxed neutral mouths with natural
+lips and beard shading. Every face is the same farmer; remove the obvious
+white teeth. Preserve the complete UV atlas layout, every island shape and
+position, the exact 1024x1024 dimensions, all clothing, hair, skin, straps,
+hay and background pixels outside the mouth regions. No camera view, no model
+render, no rearrangement, no added text. The final image must remain a usable
+game texture atlas with the same pixel alignment.
