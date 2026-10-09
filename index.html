@@ -20,7 +20,8 @@
         <div id="objective">Clear the weeds by the field gate.</div>
         <div class="progress-track"><div id="progress-fill"></div></div>
       </section>
-      <canvas id="minimap" width="180" height="180" aria-label="Farm map"></canvas>
+      <div id="map-backdrop" hidden></div>
+      <canvas id="minimap" width="180" height="180" role="button" tabindex="0" aria-expanded="false" aria-label="Expand farm map" title="Click to expand map"></canvas>
       <button id="interact" type="button" hidden><kbd>E</kbd><span id="interact-text"></span></button>
       <div id="drive-hud" hidden><span id="vehicle-name">TRACTOR</span><span id="vehicle-speed">0 km/h</span><span id="drive-progress"></span></div>
       <div id="toast" role="status" aria-live="polite"></div>

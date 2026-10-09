@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 export function weatherForDay(day) {
-  if (day === 0) return { name: 'PARTLY CLOUDY', icon: '◑', cloud: 0.4, rain: 0, fog: 0.0013 };
+  if (day === 0) return { name: 'PARTLY CLOUDY', icon: '◑', cloud: 0.22, rain: 0, fog: 0.0011 };
   let hash = (day + 41713) | 0;
   hash = Math.imul(hash ^ (hash >>> 16), 0x7feb352d);
   hash = Math.imul(hash ^ (hash >>> 15), 0x846ca68b);
@@ -47,11 +47,12 @@ export function createAtmosphere(scene, renderer, sky, sunlight, hemisphere, fil
   rain.frustumCulled = false;
   rain.visible = false;
   scene.add(rain);
-  const dayFog = new THREE.Color(0xb5c5b8);
-  const nightFog = new THREE.Color(0x26353b);
-  const sunDay = new THREE.Color(0xffecd1);
-  const sunEvening = new THREE.Color(0xeaa880);
-  const moon = new THREE.Color(0x8295b5);
+  const dayFog = new THREE.Color(0xc4d1c6);
+  const nightFog = new THREE.Color(0x334753);
+  const sunDay = new THREE.Color(0xfff4e9);
+  const sunEvening = new THREE.Color(0xffc18b);
+  const moon = new THREE.Color(0xa1b7d3);
+  const nightFill = new THREE.Color(0x8ca8c4);
   const sunDirection = new THREE.Vector3();
   let lastWeather = '';
 
@@ -65,21 +66,25 @@ export function createAtmosphere(scene, renderer, sky, sunlight, hemisphere, fil
       const altitude = Math.sin(solarAngle);
       const daylight = THREE.MathUtils.smoothstep(altitude, -0.15, 0.25);
       const warmth = 1 - THREE.MathUtils.smoothstep(altitude, 0.1, 0.58);
-      const brightness = daylight * (1 - weather.cloud * 0.42);
+      const brightness = daylight * (1 - weather.cloud * 0.32);
       sunDirection.set(Math.cos(solarAngle) * 0.72, altitude, -0.55).normalize();
       sky.material.uniforms.sunPosition.value.copy(sunDirection);
-      sunlight.position.copy(sunDirection).multiplyScalar(205);
-      sunlight.position.y = Math.max(18, sunlight.position.y);
+      sunlight.target.position.set(subject.x, subject.y, subject.z);
+      sunlight.position.copy(sunDirection).multiplyScalar(170).add(sunlight.target.position);
+      sunlight.position.y = Math.max(subject.y + 24, sunlight.position.y);
+      sunlight.target.updateMatrixWorld();
       sunlight.color.copy(sunDay).lerp(sunEvening, warmth * daylight).lerp(moon, 1 - daylight);
-      sunlight.intensity = 0.36 + brightness * 1.52;
-      hemisphere.intensity = 0.62 + brightness * 0.62;
-      fillLight.intensity = 0.16 + brightness * 0.38;
-      renderer.toneMappingExposure = 0.76 + brightness * 0.24;
-      scene.fog.density = weather.fog * (1 + (1 - daylight) * 0.18);
+      sunlight.intensity = 0.38 + brightness * 2.01;
+      sunlight.shadow.intensity = 0.72 - weather.cloud * 0.27;
+      hemisphere.intensity = 0.55 + daylight * (0.28 + weather.cloud * 0.1);
+      hemisphere.color.setRGB(0.77, 0.84, 0.93).lerp(nightFill, 1 - daylight);
+      fillLight.intensity = 0.16 + brightness * 0.04;
+      renderer.toneMappingExposure = 1.4 - daylight * 0.23 + brightness * 0.04;
+      scene.fog.density = weather.fog * (1 + (1 - daylight) * 0.12);
       scene.fog.color.copy(nightFog).lerp(dayFog, daylight * (1 - weather.cloud * 0.22));
       if (changed) {
-        sky.material.uniforms.turbidity.value = 4 + weather.cloud * 8;
-        sky.material.uniforms.rayleigh.value = 1.45 - weather.cloud * 0.32;
+        sky.material.uniforms.turbidity.value = 2.4 + weather.cloud * 5.5;
+        sky.material.uniforms.rayleigh.value = 2.1 - weather.cloud * 0.35;
       }
       rain.visible = weather.rain > 0;
       if (rain.visible) {

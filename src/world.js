@@ -18,6 +18,8 @@ import { FIELD_BOUNDS, WORK_COLUMNS, WORK_ROWS, workBits, workedAt } from './fie
 import { BUILDING_SITES, createBuildings } from './buildings.js';
 import { createVehicles } from './vehicles.js';
 import { createAtmosphere } from './weather.js';
+import { createAnimals } from './animals.js';
+import { headingFromMovement } from './navigation.js';
 
 const FIELD = FIELD_BOUNDS;
 const WORLD_SIZE = 1000;
@@ -79,7 +81,7 @@ function terrain(scene) {
     position.setY(i, heightAt(x, z));
     const dry = Math.sin(x * 0.063) * Math.cos(z * 0.057) * 0.5 + 0.5;
     const fleck = Math.sin(x * 0.47 + z * 0.34) * 0.03;
-    base.setRGB(0.235 + dry * 0.07 + fleck, 0.335 + dry * 0.085 + fleck, 0.174 + dry * 0.042);
+    base.setRGB(0.82 + dry * 0.14 + fleck, 0.85 + dry * 0.13 + fleck, 0.79 + dry * 0.15 + fleck);
     colors.push(base.r, base.g, base.b);
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -88,7 +90,8 @@ function terrain(scene) {
     map: surfaceTexture(grassDiffuse, 110, 110, true),
     normalMap: surfaceTexture(grassNormal, 110, 110),
     normalScale: new THREE.Vector2(0.55, 0.55),
-    color: 0xd2dfbc,
+    color: 0xa8d59b,
+    vertexColors: true,
     roughness: 1,
   }));
   mesh.receiveShadow = true;
@@ -477,8 +480,8 @@ function vegetation(scene) {
   treePositions.forEach(tree => obstacles.add(tree.x, tree.z, 0.57 * tree.scale));
   // Keep the cheap silhouettes at long range, where their shape is barely
   // visible. The nearby woodland uses the bundled textured tree models.
-  const detailedTreePositions = treePositions.filter((tree, index) =>
-    index % 2 === 0 && Math.hypot(tree.x, tree.z - 80) < 340);
+  const detailedTreePositions = treePositions.filter(tree =>
+    Math.hypot(tree.x, tree.z - 80) < 340 || Math.hypot(tree.x, tree.z + 300) < 330);
   const detailedTreeSet = new Set(detailedTreePositions);
   const simpleTreePositions = treePositions.filter(tree => !detailedTreeSet.has(tree));
   const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.44, 1, 6), new THREE.MeshStandardMaterial({ color: 0x756044, roughness: 1 }), simpleTreePositions.length);
@@ -515,6 +518,7 @@ function vegetation(scene) {
     const x = between(-470, 470), z = between(-460, 455);
     if (x > FIELD.minX - 10 && x < FIELD.maxX + 10 && z > FIELD.minZ - 10 && z < FIELD.maxZ + 10) continue;
     if (x > -95 && x < 95 && z > 180 && z < 252) continue;
+    if (Math.hypot(x + 64, z - 105) < 14) continue;
     if (Math.abs(x - roadX(z)) < 9.6) continue;
     if (z < -240 && z > -410 && x > -190 && x < 155) continue;
     const s = between(0.5, 1.8);
@@ -535,26 +539,41 @@ function vegetation(scene) {
       bushes.push({ x: sx, y: heightAt(sx, sz) + 0.55, z: sz, sx: between(1.2, 1.55), sy: between(0.6, 0.85), sz: between(1.2, 1.55), hedge: true });
     }
   }
-  const bushMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshStandardMaterial({ color: 0xc8d6a2, roughness: 1 }), bushes.length);
-  addInstanced(bushMesh, bushes, (_, i) => [0x719050, 0x839b58, 0x5e804c, 0x8fa35c][i % 4]);
+  const bushGeometry = new THREE.IcosahedronGeometry(1, 2);
+  const bushVertices = bushGeometry.attributes.position;
+  for (let i = 0; i < bushVertices.count; i++) {
+    const x = bushVertices.getX(i), y = bushVertices.getY(i), z = bushVertices.getZ(i);
+    const r = 0.92 + Math.sin(x * 13 + z * 7 + y * 11) * 0.08;
+    bushVertices.setXYZ(i, x * r, y * r, z * r);
+  }
+  bushGeometry.computeVertexNormals();
+  const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ color: 0xb8c9a9, roughness: 1, flatShading: false }), bushes.length);
+  const detailedBushes = bushes.filter(bush => bush.hedge || Math.hypot(bush.x + 64, bush.z - 105) < 140);
+  const detailedBushSet = new Set(detailedBushes);
+  addInstanced(bushMesh, bushes.map(bush => detailedBushSet.has(bush) ? { ...bush, sx: bush.sx * 0.05, sy: bush.sy * 0.08, sz: bush.sz * 0.05 } : bush),
+    (_, i) => [0x719050, 0x839b58, 0x5e804c, 0x8fa35c][i % 4]);
   bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * 0.66));
   bushMesh.castShadow = false;
   scene.add(bushMesh);
-  detailedHedges(scene, bushes.filter(bush => bush.hedge));
+  detailedHedges(scene, detailedBushes);
 
   const grass = [];
-  for (let i = 0; i < 18000; i++) {
-    const x = between(-250, 250), z = between(-245, 280);
+  for (let i = 0; i < 26000; i++) {
+    const farmZone = i < 18000, villageZone = i >= 18000 && i < 24000;
+    const x = farmZone ? between(-215, 210) : villageZone ? between(-210, 160) : between(-330, 330);
+    const z = farmZone ? between(-175, 285) : villageZone ? between(-430, -205) : between(-330, 350);
     if (x > FIELD.minX - 4 && x < FIELD.maxX + 4 && z > FIELD.minZ - 4 && z < FIELD.maxZ + 4) continue;
     if (x > -95 && x < 95 && z > 180 && z < 252) continue;
+    if (BUILDING_SITES.some(site => Math.abs(x - site.x) < site.width / 2 + 2 && Math.abs(z - site.z) < site.depth / 2 + 2)) continue;
     if (Math.abs(x - roadX(z)) < 10) continue;
-    const s = between(0.55, 1.2);
+    const s = between(0.52, 1.22);
     grass.push({ x, y: heightAt(x, z), z, sx: s, sy: s, sz: s, rotation: random() * 6.28 });
   }
   const grassMesh = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xe4e9b8, roughness: 1, side: THREE.DoubleSide }), grass.length);
-  addInstanced(grassMesh, grass, (_, i) => [0x769452, 0x8da65a, 0xa3ad66, 0x648749][i % 4]);
+  addInstanced(grassMesh, grass, (_, i) => [0x789455, 0x91a764, 0xa8ad70, 0x688c55, 0x9b9666][i % 5]);
   scene.add(grassMesh);
   detailedRoadsideTrees(scene, obstacles, detailedTreePositions);
+  obstacles.mapTrees = treePositions;
   return obstacles;
 }
 
@@ -570,16 +589,17 @@ function detailedHedges(scene, bushes) {
     const clusters = new Map();
     const stemsPerBush = matchMedia('(pointer: coarse)').matches ? 1 : 2;
     bushes.forEach((bush, index) => {
-      if (stemsPerBush === 1 && index % 2) return;
-      for (let stem = 0; stem < stemsPerBush; stem++) {
+      if (stemsPerBush === 1 && bush.hedge && index % 2) return;
+      const count = bush.hedge ? stemsPerBush : stemsPerBush * 2;
+      for (let stem = 0; stem < count; stem++) {
         const angle = index * 2.37 + stem * 2.09;
-        const variant = (index + stem) % variants.length;
+        const variant = bush.hedge ? (index + stem) % variants.length : 0;
         const key = `${Math.floor(bush.x / 80)},${Math.floor(bush.z / 80)},${variant}`;
         if (!clusters.has(key)) clusters.set(key, { variant, stems: [] });
         clusters.get(key).stems.push({
           x: bush.x + Math.cos(angle) * 0.52,
           z: bush.z + Math.sin(angle) * 0.52,
-          scale: 4.2 + (index * 17 + stem * 13) % 19 * 0.085,
+          scale: (4.2 + (index * 17 + stem * 13) % 19 * 0.085) * (bush.hedge ? 1 : Math.max(0.8, bush.sx * 1.25)),
           rotation: angle,
         });
       }
@@ -589,7 +609,7 @@ function detailedHedges(scene, bushes) {
       const material = variants[variant].material;
       material.side = THREE.DoubleSide;
       material.roughness = 1;
-      material.color.set(0xc7d7b4);
+      material.color.set(0x9cb381);
       material.alphaMap = alphaMap;
       material.alphaTest = 0.45;
       material.needsUpdate = true;
@@ -615,10 +635,11 @@ function detailedRoadsideTrees(scene, obstacles, woodlandTrees = []) {
     [-166, 195], [-146, 115], [-180, 35], [-148, -46], [-184, -127],
     [-139, -205], [-205, -238], [-218, 231], [-230, 75], [-230, -88],
     [160, 10], [179, -79], [167, -174], [204, -227], [213, 82], [230, 194],
+    [-70, -211], [-24, -211], [-70, -241], [-23, -241], [-33, -233],
   ];
   locations.forEach(([x, z]) => obstacles.add(x, z, 0.9));
   const modelLocations = [
-    ...locations.map(([x, z], index) => ({ x, z, index, scale: 0.9 + (index % 4) * 0.12 })),
+    ...locations.map(([x, z], index) => ({ x, z, index, scale: index >= 16 ? 0.72 + index % 3 * 0.08 : 0.9 + (index % 4) * 0.12 })),
     ...woodlandTrees.map((tree, index) => ({ ...tree, index: index + locations.length, scale: tree.scale })),
   ];
   [[oakTreeUrl, 0], [birchTreeUrl, 1]].forEach(([url, kind]) => {
@@ -629,15 +650,33 @@ function detailedRoadsideTrees(scene, obstacles, woodlandTrees = []) {
       const size = new THREE.Vector3();
       bounds.getSize(size);
       const normalized = 9.2 / Math.max(size.y, 0.01);
-      modelLocations.forEach(({ x, z, index, scale: treeScale }) => {
-        if (index % 2 !== kind) return;
-        const tree = source.clone(true);
-        const scale = normalized * treeScale;
-        tree.scale.multiplyScalar(scale);
-        tree.position.set(x, heightAt(x, z) - bounds.min.y * scale, z);
-        tree.rotation.y = index * 1.91;
-        tree.traverse(child => { if (child.isMesh) child.castShadow = index < locations.length || Math.hypot(x, z - 100) < 160; });
-        scene.add(tree);
+      const chunks = new Map();
+      modelLocations.filter(site => site.index % 2 === kind).forEach(site => {
+        const key = `${Math.floor(site.x / 110)},${Math.floor(site.z / 110)}`;
+        if (!chunks.has(key)) chunks.set(key, []);
+        chunks.get(key).push(site);
+      });
+      // Bake each source mesh once, then instance by woodland chunk. This keeps
+      // the textured tree models without a draw call for every single tree.
+      source.traverse(child => {
+        if (!child.isMesh) return;
+        const geometry = child.geometry.clone();
+        geometry.applyMatrix4(child.matrixWorld);
+        for (const sites of chunks.values()) {
+          const mesh = new THREE.InstancedMesh(geometry, child.material, sites.length);
+          sites.forEach(({ x, z, index, scale: treeScale }, i) => {
+            const scale = normalized * treeScale;
+            dummy.position.set(x, heightAt(x, z) - bounds.min.y * scale, z);
+            dummy.rotation.set(0, index * 1.91, 0);
+            dummy.scale.setScalar(scale);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+          });
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.computeBoundingSphere();
+          mesh.castShadow = sites.some(({ x, z, index }) => index < locations.length || Math.hypot(x, z - 100) < 160);
+          scene.add(mesh);
+        }
       });
     }, undefined, cause => console.warn('Roadside tree model unavailable', cause));
   });
@@ -649,9 +688,11 @@ function grassTuftGeometry() {
     const angle = blade * Math.PI * 2 / 8;
     const x = Math.cos(angle) * 0.13, z = Math.sin(angle) * 0.13;
     const height = 0.28 + (blade % 4) * 0.08;
-    const tipX = x + Math.cos(angle) * 0.19;
-    const tipZ = z + Math.sin(angle) * 0.19;
-    vertices.push(x - 0.045, 0, z, x + 0.045, 0, z, tipX, height, tipZ);
+    const midX = x + Math.cos(angle) * 0.08, midZ = z + Math.sin(angle) * 0.08;
+    const tipX = x + Math.cos(angle) * 0.24, tipZ = z + Math.sin(angle) * 0.24;
+    const sideX = Math.sin(angle) * 0.043, sideZ = -Math.cos(angle) * 0.043;
+    vertices.push(x - sideX, 0, z - sideZ, x + sideX, 0, z + sideZ, midX, height * 0.58, midZ);
+    vertices.push(x + sideX, 0, z + sideZ, tipX, height, tipZ, midX, height * 0.58, midZ);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
@@ -801,14 +842,17 @@ function town(scene, obstacles) {
   pavingTexture.repeat.set(3, 8);
   const paving = new THREE.MeshStandardMaterial({ map: pavingTexture, roughness: 1, side: THREE.DoubleSide });
   const street = new THREE.MeshStandardMaterial({
-    map: surfaceTexture(asphaltDiffuse, 3, 2, true), color: 0xc4bfb0, roughness: 1, side: THREE.DoubleSide,
+    map: surfaceTexture(asphaltDiffuse, 3, 2, true), color: 0xc5c7be, roughness: 1, side: THREE.DoubleSide,
   });
   for (const [z0, z1, west, east] of [[-288, -280, -188, 72], [-329, -321, -187, 48], [-373, -365, -190, 52]]) {
-    const lane = new THREE.Mesh(patchGeometry(west, east, z0, z1, 22, 2, 0.18), street);
-    lane.receiveShadow = true; scene.add(lane);
-    for (const edge of [z0 - 2.5, z1 + 2.5]) {
-      const walk = new THREE.Mesh(patchGeometry(west, east, edge - 1.6, edge + 1.6, 22, 2, 0.2), paving);
-      walk.receiveShadow = true; scene.add(walk);
+    const roadCenter = roadX((z0 + z1) / 2);
+    for (const [start, end] of [[west, roadCenter - 5.1], [roadCenter + 5.1, east]]) {
+      const lane = new THREE.Mesh(patchGeometry(start, end, z0, z1, 12, 2, 0.18), street);
+      lane.receiveShadow = true; scene.add(lane);
+      for (const edge of [z0 - 2.5, z1 + 2.5]) {
+        const walk = new THREE.Mesh(patchGeometry(start, end, edge - 1.6, edge + 1.6, 12, 2, 0.2), paving);
+        walk.receiveShadow = true; scene.add(walk);
+      }
     }
   }
   for (const side of [-1, 1]) {
@@ -841,14 +885,6 @@ function town(scene, obstacles) {
   const parkWood = new THREE.MeshStandardMaterial({ color: 0x765b40, roughness: 0.95 });
   const benchIron = new THREE.MeshStandardMaterial({ color: 0x4b5551, metalness: 0.4, roughness: 0.6 });
   const parkLeaves = [0x6a8858, 0x79945a, 0x56794d].map(color => new THREE.MeshStandardMaterial({ color, roughness: 1 }));
-  for (const [tx, tz, size] of [[-70, -211, 1.1], [-24, -211, 0.9], [-70, -241, 0.98], [-23, -241, 1.05], [-33, -233, 0.77]]) {
-    const base = heightAt(tx, tz);
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.27 * size, 0.38 * size, 5 * size, 8), parkWood);
-    trunk.position.set(tx, base + 2.5 * size, tz); trunk.castShadow = true; scene.add(trunk);
-    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(2.15 * size, 1), parkLeaves[Math.abs(tx + tz) % 3]);
-    crown.position.set(tx, base + 5.7 * size, tz); crown.castShadow = true; scene.add(crown);
-    obstacles.add(tx, tz, 0.49 * size);
-  }
   for (const [bx, bz] of [[-61, -217], [-33, -217], [-62, -238], [-32, -238]]) {
     const bench = new THREE.Group(); bench.position.set(bx, heightAt(bx, bz), bz);
     box(bench, 2.5, 0.13, 0.64, 0, 0.62, 0, parkWood);
@@ -870,6 +906,16 @@ function town(scene, obstacles) {
   scene.add(stemMesh, flowerMesh);
 
   const people = [];
+  const footpaths = [-1, 1].map(side => new THREE.CatmullRomCurve3([
+    [-231, 7.2], [-272, 7.2], [-328, 7.2], [-384, 7.2], [-404, 8.2],
+    [-390, 9.1], [-330, 9.1], [-270, 9.1], [-236, 8.3],
+  ].map(([z, offset]) => new THREE.Vector3(roadX(z) + side * offset, 0, z)), true, 'catmullrom', 0.25));
+  const parkPaths = [new THREE.CatmullRomCurve3([
+    [-58, -226], [-54, -233], [-42, -233], [-35, -227], [-40, -219], [-52, -219],
+  ].map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'catmullrom', 0.3),
+  new THREE.CatmullRomCurve3([
+    [-56, -226], [-51, -231], [-41, -230], [-38, -225], [-44, -221], [-53, -221],
+  ].map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'catmullrom', 0.3)];
   const coatColors = [0x596c48, 0x5b6877, 0x8a6954, 0x8a8064, 0x6e5b68, 0x485d60];
   const skin = new THREE.MeshStandardMaterial({ color: 0xc39b7d, roughness: 1 });
   const trousers = new THREE.MeshStandardMaterial({ color: 0x3f4745, roughness: 1 });
@@ -901,18 +947,20 @@ function town(scene, obstacles) {
       arms.push(arm);
     }
     scene.add(person);
-    people.push({ person, legs, arms, side: i % 2 ? 1 : -1, phase: i * 0.63, pace: 0.67 + i * 0.07, park: i >= 6 });
+    const path = i < 6 ? footpaths[i % 2] : parkPaths[i % 2];
+    people.push({ person, legs, arms, path, length: path.getLength(), offset: ((i * 0.37) % 1), speed: 0.95 + i % 3 * 0.11 });
   }
   return {
     update(time, player) {
-      people.forEach(({ person, legs, arms, side, phase, pace, park }, index) => {
-        const cycle = time * pace + phase;
-        const zPos = park ? -225 + Math.sin(cycle * 0.36) * 11 : -330 + Math.sin(cycle * 0.2) * 84;
-        const xPos = park ? -47 + Math.cos(cycle * 0.36) * (index === 8 ? 9 : 15) : roadX(zPos) + side * 7.1;
-        person.position.set(xPos, heightAt(xPos, zPos), zPos);
-        person.rotation.y = park ? cycle * 0.36 + Math.PI / 2 : Math.cos(cycle * 0.2) > 0 ? 0 : Math.PI;
-        person.visible = Math.hypot(player.x - xPos, player.z - zPos) < 260;
-        const swing = Math.sin(cycle * 7.2) * 0.38;
+      people.forEach(({ person, legs, arms, path, length, offset, speed }, index) => {
+        const travel = time * speed;
+        const progress = (travel / length + offset) % 1;
+        const point = path.getPointAt(progress);
+        const tangent = path.getTangentAt(progress);
+        person.position.set(point.x, heightAt(point.x, point.z), point.z);
+        person.rotation.y = headingFromMovement(tangent.x, tangent.z);
+        person.visible = Math.hypot(player.x - point.x, player.z - point.z) < 245;
+        const swing = Math.sin(travel * 4.4 + index * 1.2) * 0.42;
         legs[0].rotation.x = swing; legs[1].rotation.x = -swing;
         arms[0].rotation.x = -swing * 0.65; arms[1].rotation.x = swing * 0.65;
       });
@@ -956,28 +1004,29 @@ function lightAndSky(scene, renderer) {
   const sun = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.48, Math.PI * 0.28);
   sky.material.uniforms.sunPosition.value.copy(sun);
   scene.add(sky);
-  const hemisphere = new THREE.HemisphereLight(0xe7f1ff, 0x685f48, 1.2);
+  const hemisphere = new THREE.HemisphereLight(0xd8e6ef, 0x4d5544, 0.8);
   scene.add(hemisphere);
-  const fillLight = new THREE.DirectionalLight(0xf0f1e5, 0.62);
+  const fillLight = new THREE.DirectionalLight(0xd9e5ef, 0.2);
   fillLight.position.set(145, 95, 185);
   scene.add(fillLight);
-  const sunlight = new THREE.DirectionalLight(0xffe8c5, 1.85);
+  const sunlight = new THREE.DirectionalLight(0xfff4e9, 2.2);
   sunlight.position.set(-95, 180, -90);
   sunlight.castShadow = true;
   const shadowResolution = matchMedia('(pointer: coarse)').matches ? 1024 : 2048;
   sunlight.shadow.mapSize.set(shadowResolution, shadowResolution);
-  sunlight.shadow.camera.left = -210;
-  sunlight.shadow.camera.right = 210;
-  sunlight.shadow.camera.top = 210;
-  sunlight.shadow.camera.bottom = -210;
+  const shadowExtent = matchMedia('(pointer: coarse)').matches ? 60 : 82;
+  sunlight.shadow.camera.left = -shadowExtent;
+  sunlight.shadow.camera.right = shadowExtent;
+  sunlight.shadow.camera.top = shadowExtent;
+  sunlight.shadow.camera.bottom = -shadowExtent;
   sunlight.shadow.camera.near = 1;
-  sunlight.shadow.camera.far = 450;
+  sunlight.shadow.camera.far = 340;
   sunlight.shadow.bias = -0.0003;
   sunlight.shadow.normalBias = 0.02;
   sunlight.target.position.set(-10, 0, -15);
   scene.add(sunlight.target, sunlight);
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.95;
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.1;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -991,9 +1040,10 @@ export function createWorld(scene, renderer) {
   const fieldVisual = field(scene);
   const vegetationObstacles = vegetation(scene);
   const village = town(scene, vegetationObstacles);
+  const animals = createAnimals(scene, heightAt);
   farmDetails(scene, vegetationObstacles);
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
-  const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere, village };
+  const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius) || animals.collides(x, z, radius);
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere, village, animals, mapTrees: vegetationObstacles.mapTrees };
 }

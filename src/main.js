@@ -10,6 +10,7 @@ import {
 } from './farming.js';
 import { FIELD_BOUNDS, WORK_COLUMNS, WORK_ROWS, workedAt } from './fieldwork.js';
 import { advanceClock, timeLabel, weatherForDay } from './weather.js';
+import { mapArrowAngle, headingFromMovement } from './navigation.js';
 import './fonts.css';
 import './style.css';
 
@@ -47,6 +48,8 @@ try {
   const options = $('#panel-options');
   const map = $('#minimap');
   const mapContext = map.getContext('2d');
+  const mapBackdrop = $('#map-backdrop');
+  let mapExpanded = false;
   let panelKind = null;
   let action = null;
   let cameraYaw = -0.08;
@@ -164,6 +167,18 @@ try {
     panelKind = null;
     panel.hidden = true;
     keys.clear();
+  }
+
+  function setMapExpanded(expanded) {
+    mapExpanded = expanded;
+    map.classList.toggle('expanded', expanded);
+    mapBackdrop.hidden = !expanded;
+    map.setAttribute('aria-expanded', String(expanded));
+    map.setAttribute('aria-label', expanded ? 'Collapse farm map' : 'Expand farm map');
+    map.title = expanded ? 'Click to close map' : 'Click to expand map';
+    map.width = expanded ? 540 : 180;
+    map.height = expanded ? 540 : 180;
+    drawMap(world.vehicles.activeGroup?.position || john.group.position);
   }
 
   function addOption(label, detail, fn, disabled = false) {
@@ -321,6 +336,7 @@ try {
   }
 
   function openPanel(kind) {
+    if (mapExpanded) setMapExpanded(false);
     panelKind = kind;
     panel.hidden = false;
     keys.clear();
@@ -377,7 +393,7 @@ try {
     if (event.repeat) return;
     if (event.code === 'KeyC') toggleSprint();
     if (event.code === 'KeyE') useAction();
-    if (event.code === 'Escape') { closePanel(); $('#help').hidden = true; }
+    if (event.code === 'Escape') { closePanel(); setMapExpanded(false); $('#help').hidden = true; }
   });
   window.addEventListener('keyup', event => keys.delete(event.code));
   window.addEventListener('blur', () => keys.clear());
@@ -391,6 +407,14 @@ try {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
   });
+  map.addEventListener('click', () => setMapExpanded(!mapExpanded));
+  map.addEventListener('keydown', event => {
+    if (event.code === 'Enter' || event.code === 'Space') {
+      event.preventDefault();
+      setMapExpanded(!mapExpanded);
+    }
+  });
+  mapBackdrop.addEventListener('click', () => setMapExpanded(false));
 
   renderer.domElement.addEventListener('pointerdown', event => {
     dragPointer = event.pointerId;
@@ -513,11 +537,20 @@ try {
 
   function drawMap(subject) {
     const context = mapContext;
-    const scale = 180 / 310;
-    const px = x => 90 + (x - subject.x) * scale;
-    const pz = z => 90 + (z - subject.z) * scale;
+    context.setTransform(map.width / 180, 0, 0, map.height / 180, 0, 0);
+    const scale = 180 / (mapExpanded ? 680 : 310);
+    const centerX = mapExpanded ? -65 : subject.x;
+    const centerZ = mapExpanded ? -86 : subject.z;
+    const px = x => 90 + (x - centerX) * scale;
+    const pz = z => 90 + (z - centerZ) * scale;
     context.clearRect(0, 0, 180, 180);
-    context.fillStyle = '#1b3025'; context.fillRect(0, 0, 180, 180);
+    context.fillStyle = '#263d2c'; context.fillRect(0, 0, 180, 180);
+    for (const tree of world.mapTrees) {
+      const x = px(tree.x), y = pz(tree.z);
+      if (x < 0 || x > 180 || y < 0 || y > 180) continue;
+      context.fillStyle = tree.kind > 0.5 ? '#50744b' : '#426744';
+      context.beginPath(); context.arc(x, y, mapExpanded ? 1.7 : 1.4, 0, Math.PI * 2); context.fill();
+    }
     const { minX, maxX, minZ, maxZ } = world.field;
     const stage = farm.phase;
     refreshFieldMap();
@@ -536,7 +569,7 @@ try {
       if (z === -500) context.moveTo(x, y); else context.lineTo(x, y);
     }
     context.strokeStyle = '#8c9183'; context.lineWidth = 6; context.stroke();
-    if (subject.z < -105) {
+    {
       context.fillStyle = '#628358';
       context.fillRect(px(-80), pz(-251), 66 * scale, 50 * scale);
       context.fillStyle = '#acaa91';
@@ -556,6 +589,12 @@ try {
       context.fillStyle = '#d8bc69';
       context.beginPath(); context.arc(px(vehicle.group.position.x), pz(vehicle.group.position.z), 3.5, 0, Math.PI * 2); context.fill();
     }
+    context.fillStyle = '#e5ddbf';
+    for (const sheep of world.animals.mapPositions) {
+      const x = px(sheep.x), y = pz(sheep.z);
+      if (x < 1 || x > 179 || y < 1 || y > 179) continue;
+      context.beginPath(); context.arc(x, y, mapExpanded ? 1.35 : 1, 0, Math.PI * 2); context.fill();
+    }
     const destination = ['clear', 'test'].includes(farm.phase) ? { x: -55, z: 105 } :
       farm.phase === 'test_collected' ? { x: -42, z: -265 } :
       ['test_pending', 'ready_to_sow', 'growing', 'spring_care', 'harvested'].includes(farm.phase) ? { x: 38, z: 201 } :
@@ -568,8 +607,8 @@ try {
       context.strokeStyle = '#bfe0a3'; context.lineWidth = 2.5;
       context.beginPath(); context.arc(markerX, markerY, 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * farm.accessCleared); context.stroke();
     }
-    context.save(); context.translate(90, 90);
-    context.rotate(world.vehicles.driven ? world.vehicles.activeGroup.rotation.y : john.group.rotation.y);
+    context.save(); context.translate(px(subject.x), pz(subject.z));
+    context.rotate(mapArrowAngle(world.vehicles.driven ? world.vehicles.activeGroup.rotation.y : john.group.rotation.y));
     context.fillStyle = '#fff3c6'; context.beginPath(); context.moveTo(0, -7); context.lineTo(5, 5); context.lineTo(-5, 5); context.closePath(); context.fill();
     context.restore();
   }
@@ -618,7 +657,7 @@ try {
         const nextZ = THREE.MathUtils.clamp(john.group.position.z + dz, -475, 475);
         if (!onFootCollides(nextX, john.group.position.z)) john.group.position.x = nextX;
         if (!onFootCollides(john.group.position.x, nextZ)) john.group.position.z = nextZ;
-        const direction = Math.atan2(-dx, -dz);
+        const direction = headingFromMovement(dx, dz);
         let difference = direction - john.group.rotation.y;
         difference = Math.atan2(Math.sin(difference), Math.cos(difference));
         john.group.rotation.y += difference * Math.min(1, delta * 12);
@@ -638,6 +677,7 @@ try {
     }
     world.buildings.update(subject);
     world.village.update(elapsed, subject);
+    world.animals.update(elapsed, subject);
     world.atmosphere.update(farm, delta, subject);
     target.lerp(desired.set(subject.x, subject.y + subjectHeight, subject.z), 1 - Math.exp(-delta * 7));
     const horizontal = distance * Math.cos(cameraPitch);
