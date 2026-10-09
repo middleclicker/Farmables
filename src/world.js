@@ -408,19 +408,25 @@ function vegetation(scene) {
     treePositions.push({ x, z, y: heightAt(x, z), scale: between(0.75, 1.48), kind: random() });
   }
   treePositions.forEach(tree => obstacles.add(tree.x, tree.z, 0.57 * tree.scale));
-  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.44, 1, 6), new THREE.MeshStandardMaterial({ color: 0x756044, roughness: 1 }), treePositions.length);
+  // Keep the cheap silhouettes at long range, where their shape is barely
+  // visible. The nearby woodland uses the bundled textured tree models.
+  const detailedTreePositions = treePositions.filter((tree, index) =>
+    index % 2 === 0 && Math.hypot(tree.x, tree.z - 80) < 340);
+  const detailedTreeSet = new Set(detailedTreePositions);
+  const simpleTreePositions = treePositions.filter(tree => !detailedTreeSet.has(tree));
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.44, 1, 6), new THREE.MeshStandardMaterial({ color: 0x756044, roughness: 1 }), simpleTreePositions.length);
   const crowns = [0, 1, 2].map(() => new THREE.InstancedMesh(
     new THREE.SphereGeometry(1, 10, 8),
     new THREE.MeshStandardMaterial({ color: 0xe0e8d0, roughness: 1 }),
-    treePositions.length,
+    simpleTreePositions.length,
   ));
-  const trunkItems = treePositions.map(t => ({ x: t.x, y: t.y + 3.1 * t.scale, z: t.z, sx: 0.9 * t.scale, sy: 6.2 * t.scale, sz: 0.9 * t.scale, rotation: random() * 6.28 }));
+  const trunkItems = simpleTreePositions.map(t => ({ x: t.x, y: t.y + 3.1 * t.scale, z: t.z, sx: 0.9 * t.scale, sy: 6.2 * t.scale, sz: 0.9 * t.scale, rotation: random() * 6.28 }));
   addInstanced(trunks, trunkItems, () => 0x776449);
   trunks.castShadow = true;
   scene.add(trunks);
   const palette = [0x61834e, 0x6e8d50, 0x7a9257, 0x54764b, 0x859554];
   crowns.forEach((mesh, lobe) => {
-    const items = treePositions.map(t => {
+    const items = simpleTreePositions.map(t => {
       const angle = t.kind * 8 + lobe * 2.094;
       const spread = lobe === 0 ? 0 : 1.28 * t.scale;
       const radius = (lobe === 0 ? 3.2 : 2.65) * t.scale;
@@ -445,7 +451,7 @@ function vegetation(scene) {
     if (Math.abs(x - roadX(z)) < 9.6) continue;
     if (z < -240 && z > -410 && x > -190 && x < 155) continue;
     const s = between(0.5, 1.8);
-    bushes.push({ x, y: heightAt(x, z) + s * 0.55, z, sx: s * 1.5, sy: s * 0.75, sz: s * 1.2, rotation: random() * 6.28 });
+    bushes.push({ x, y: heightAt(x, z) + s * 0.42, z, sx: s * 0.9, sy: s * 0.58, sz: s * 0.8, rotation: random() * 6.28 });
   }
   // A dense, trimmed hedgerow gives the cultivated field its clear boundary.
   for (let x = FIELD.minX - 2; x < FIELD.maxX + 3; x += 2.7) {
@@ -481,7 +487,7 @@ function vegetation(scene) {
   const grassMesh = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xe4e9b8, roughness: 1, side: THREE.DoubleSide }), grass.length);
   addInstanced(grassMesh, grass, (_, i) => [0x769452, 0x8da65a, 0xa3ad66, 0x648749][i % 4]);
   scene.add(grassMesh);
-  detailedRoadsideTrees(scene, obstacles);
+  detailedRoadsideTrees(scene, obstacles, detailedTreePositions);
   return obstacles;
 }
 
@@ -536,7 +542,7 @@ function detailedHedges(scene, bushes) {
   }, undefined, cause => console.warn('Hedge detail model unavailable', cause));
 }
 
-function detailedRoadsideTrees(scene, obstacles) {
+function detailedRoadsideTrees(scene, obstacles, woodlandTrees = []) {
   const loader = new GLTFLoader();
   const locations = [
     [-166, 195], [-146, 115], [-180, 35], [-148, -46], [-184, -127],
@@ -544,6 +550,10 @@ function detailedRoadsideTrees(scene, obstacles) {
     [160, 10], [179, -79], [167, -174], [204, -227], [213, 82], [230, 194],
   ];
   locations.forEach(([x, z]) => obstacles.add(x, z, 0.9));
+  const modelLocations = [
+    ...locations.map(([x, z], index) => ({ x, z, index, scale: 0.9 + (index % 4) * 0.12 })),
+    ...woodlandTrees.map((tree, index) => ({ ...tree, index: index + locations.length, scale: tree.scale })),
+  ];
   [[oakTreeUrl, 0], [birchTreeUrl, 1]].forEach(([url, kind]) => {
     loader.load(url, gltf => {
       const source = gltf.scene;
@@ -552,14 +562,14 @@ function detailedRoadsideTrees(scene, obstacles) {
       const size = new THREE.Vector3();
       bounds.getSize(size);
       const normalized = 9.2 / Math.max(size.y, 0.01);
-      locations.forEach(([x, z], index) => {
+      modelLocations.forEach(({ x, z, index, scale: treeScale }) => {
         if (index % 2 !== kind) return;
         const tree = source.clone(true);
-        const scale = normalized * (0.9 + (index % 4) * 0.12);
+        const scale = normalized * treeScale;
         tree.scale.multiplyScalar(scale);
         tree.position.set(x, heightAt(x, z) - bounds.min.y * scale, z);
         tree.rotation.y = index * 1.91;
-        tree.traverse(child => { if (child.isMesh) child.castShadow = true; });
+        tree.traverse(child => { if (child.isMesh) child.castShadow = index < locations.length || Math.hypot(x, z - 100) < 160; });
         scene.add(tree);
       });
     }, undefined, cause => console.warn('Roadside tree model unavailable', cause));
