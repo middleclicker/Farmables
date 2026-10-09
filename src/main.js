@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createWorld } from './world.js';
+import { createWorld, createContactShadow } from './world.js';
 import { prewarmBuildingTextures } from './buildings.js';
 import { createJohn } from './john.js';
 import {
@@ -28,6 +28,8 @@ try {
   const camera = new THREE.PerspectiveCamera(59, innerWidth / innerHeight, 0.1, 1500);
   const world = createWorld(scene, renderer);
   const john = createJohn(scene);
+  const johnContactShadow = createContactShadow(scene, 1.45, 0.85, 0.38);
+  const bicycleContactShadow = createContactShadow(scene, 2.7, 0.9, 0.31);
   const farm = loadFarm(localStorage);
   const restoreVehicle = (group, coordinates) => {
     group.position.set(coordinates[0], world.heightAt(coordinates[0], coordinates[1]), coordinates[1]);
@@ -715,6 +717,11 @@ try {
     world.village.update(elapsed, subject);
     world.animals.update(elapsed, subject);
     world.atmosphere.update(farm, delta, subject);
+    johnContactShadow.visible = !world.vehicles.driven && !world.bicycle.riding;
+    johnContactShadow.position.set(john.group.position.x, world.heightAt(john.group.position.x, john.group.position.z) + 0.075, john.group.position.z);
+    bicycleContactShadow.visible = world.bicycle.group.visible;
+    bicycleContactShadow.position.set(world.bicycle.group.position.x, world.heightAt(world.bicycle.group.position.x, world.bicycle.group.position.z) + 0.075, world.bicycle.group.position.z);
+    bicycleContactShadow.rotation.y = world.bicycle.group.rotation.y;
     target.lerp(desired.set(subject.x, subject.y + subjectHeight, subject.z), 1 - Math.exp(-delta * 7));
     const horizontal = distance * Math.cos(cameraPitch);
     desired.set(target.x + Math.sin(cameraYaw) * horizontal, target.y + distance * Math.sin(cameraPitch), target.z + Math.cos(cameraYaw) * horizontal);

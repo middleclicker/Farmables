@@ -33,6 +33,32 @@ function randomGenerator(seed) {
 const random = randomGenerator(748201);
 const between = (a, b) => a + (b - a) * random();
 const textureLoader = new THREE.TextureLoader();
+let contactShadowTexture;
+
+function shadowTexture() {
+  if (contactShadowTexture) return contactShadowTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const context = canvas.getContext('2d');
+  const gradient = context.createRadialGradient(32, 32, 2, 32, 32, 31);
+  gradient.addColorStop(0, 'rgba(0, 0, 0, 0.72)');
+  gradient.addColorStop(0.48, 'rgba(0, 0, 0, 0.33)');
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 64, 64);
+  contactShadowTexture = new THREE.CanvasTexture(canvas);
+  return contactShadowTexture;
+}
+
+export function createContactShadow(scene, width, depth, opacity = 0.3) {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
+  );
+  mesh.renderOrder = 1;
+  scene.add(mesh);
+  return mesh;
+}
 
 function surfaceTexture(url, repeatX, repeatY, color = false) {
   const texture = textureLoader.load(url);
@@ -70,50 +96,103 @@ export function roadX(z) {
   return -110 + 9 * Math.sin(z / 165) + 4 * Math.sin(z / 73);
 }
 
+function valueNoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const hash = (a, b) => {
+    let n = Math.imul(a, 374761393) + Math.imul(b, 668265263);
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+  };
+  return THREE.MathUtils.lerp(
+    THREE.MathUtils.lerp(hash(ix, iz), hash(ix + 1, iz), sx),
+    THREE.MathUtils.lerp(hash(ix, iz + 1), hash(ix + 1, iz + 1), sx), sz);
+}
+
+function distanceToTrack(x, z, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
+  return Math.hypot(x - ax - dx * t, z - az - dz * t);
+}
+
+function groundProfile(x, z) {
+  const broad = valueNoise(x / 105 + 3.1, z / 105 - 1.8);
+  const medium = valueNoise(x / 31 - 8.2, z / 31 + 4.7);
+  const fine = valueNoise(x / 8 + 2.4, z / 8 - 6.9);
+  const yardDistance = Math.hypot((x + 2) / 110, (z - 209) / 57);
+  const yard = 1 - THREE.MathUtils.smoothstep(yardDistance, 0.35, 1.08);
+  const dry = THREE.MathUtils.clamp(
+    THREE.MathUtils.smoothstep(broad, 0.34, 0.7) * 0.42 +
+    THREE.MathUtils.smoothstep(medium, 0.37, 0.72) * 0.82 + (fine - 0.5) * 0.08, 0, 1) * (1 - yard * 0.47);
+  const damp = THREE.MathUtils.smoothstep(valueNoise(x / 24 + 13, z / 24 - 5), 0.49, 0.74);
+  const driveway = distanceToTrack(x, z, roadX(197), 197, 40, 197 + Math.sin(x * 0.025) * 2);
+  const gatePath = distanceToTrack(x, z, -55, 105, -41, 191);
+  const machineryTrack = distanceToTrack(x, z, -39, 169, -40, 203);
+  const worn = Math.max(
+    1 - THREE.MathUtils.smoothstep(driveway, 2.5, 10),
+    1 - THREE.MathUtils.smoothstep(gatePath, 1.5, 5.5),
+    1 - THREE.MathUtils.smoothstep(machineryTrack, 2, 6),
+  ) * (0.82 + medium * 0.18);
+  const irregularSoil = yard * THREE.MathUtils.smoothstep(valueNoise(x / 21 + 10.7, z / 21 - 2.4), 0.57, 0.76) * 0.52;
+  const exposed = Math.max(worn * 0.9, irregularSoil, yard * (0.06 + dry * 0.1));
+  return { dry, damp, yard, worn, exposed, fine, medium };
+}
+
 function terrain(scene) {
   const segments = 200;
   const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segments, segments);
   geometry.rotateX(-Math.PI / 2);
   const position = geometry.attributes.position;
   const colors = [];
+  const wear = [];
+  const dryness = [];
+  const dampness = [];
   const base = new THREE.Color();
-  const green = new THREE.Color(0xb0c695);
-  const straw = new THREE.Color(0xd2bd83);
-  const worn = new THREE.Color(0xb6a184);
-  const noise = (x, z) => {
-    const ix = Math.floor(x), iz = Math.floor(z);
-    const fx = x - ix, fz = z - iz;
-    const smoothX = fx * fx * (3 - 2 * fx), smoothZ = fz * fz * (3 - 2 * fz);
-    const hash = (a, b) => {
-      const n = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
-      return n - Math.floor(n);
-    };
-    return THREE.MathUtils.lerp(
-      THREE.MathUtils.lerp(hash(ix, iz), hash(ix + 1, iz), smoothX),
-      THREE.MathUtils.lerp(hash(ix, iz + 1), hash(ix + 1, iz + 1), smoothX), smoothZ);
-  };
+  const green = new THREE.Color(0xe5eddf);
+  const straw = new THREE.Color(0xf0e9d9);
+  const exposedSoil = new THREE.Color(0xe5dcd2);
+  const dampGreen = new THREE.Color(0xdce9dd);
   for (let i = 0; i < position.count; i++) {
     const x = position.getX(i), z = position.getZ(i);
     position.setY(i, heightAt(x, z));
-    const broad = noise(x / 38, z / 38);
-    const patch = noise(x / 12, z / 12);
-    const dry = THREE.MathUtils.smoothstep(broad * 0.7 + patch * 0.3, 0.42, 0.7);
-    const yard = Math.max(0, 1 - Math.hypot(x - 21, z - 187) / 64);
-    const track = Math.max(0, 1 - Math.abs(x - roadX(z)) / 20) * 0.28;
-    base.copy(green).lerp(straw, dry * 0.75).lerp(worn, Math.max(yard * 0.48, track));
-    base.multiplyScalar(0.91 + patch * 0.15);
+    const profile = groundProfile(x, z);
+    base.copy(green).lerp(straw, profile.dry * 0.65)
+      .lerp(dampGreen, profile.damp * 0.26)
+      .lerp(exposedSoil, profile.exposed * 0.86);
+    base.multiplyScalar(0.94 + profile.fine * 0.1);
     colors.push(base.r, base.g, base.b);
+    wear.push(profile.exposed);
+    dryness.push(profile.dry);
+    dampness.push(profile.damp);
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('groundWear', new THREE.Float32BufferAttribute(wear, 1));
+  geometry.setAttribute('groundDry', new THREE.Float32BufferAttribute(dryness, 1));
+  geometry.setAttribute('groundDamp', new THREE.Float32BufferAttribute(dampness, 1));
   geometry.computeVertexNormals();
-  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     map: surfaceTexture(grassDiffuse, 110, 110, true),
     normalMap: surfaceTexture(grassNormal, 110, 110),
     normalScale: new THREE.Vector2(0.55, 0.55),
-    color: 0xf4f0dd,
+    color: 0xffffff,
     vertexColors: true,
     roughness: 1,
-  }));
+  });
+  material.onBeforeCompile = shader => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float groundWear;\nattribute float groundDry;\nattribute float groundDamp;\nvarying vec3 vGroundMix;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundMix = vec3(groundDry, groundDamp, groundWear);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundMix;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        vec3 fineDetail = (diffuseColor.rgb - vec3(0.2)) * 0.31;
+        vec3 groundColor = mix(vec3(0.13, 0.30, 0.16), vec3(0.34, 0.35, 0.22), clamp(vGroundMix.x, 0.0, 1.0));
+        groundColor = mix(groundColor, vec3(0.19, 0.27, 0.2), clamp(vGroundMix.y * 0.72, 0.0, 1.0));
+        groundColor = mix(groundColor, vec3(0.34, 0.31, 0.27), clamp(vGroundMix.z, 0.0, 1.0));
+        diffuseColor.rgb = groundColor + fineDetail;`);
+  };
+  const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   scene.add(mesh);
 }
@@ -134,38 +213,6 @@ function makeNoiseTexture(colors, size = 256, seed = 12) {
   context.putImageData(image, 0, 0);
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
-}
-
-function makeGrassTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  const r = randomGenerator(9024);
-  ctx.fillStyle = '#66834d';
-  ctx.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 580; i++) {
-    const x = r() * 512, y = r() * 512;
-    const radius = 7 + r() * 33;
-    ctx.fillStyle = ['#78905916', '#a0a06a13', '#3d6e4018', '#b2a46c14'][i % 4];
-    ctx.beginPath();
-    ctx.ellipse(x, y, radius, radius * (0.6 + r()), r() * 6.28, 0, 6.28);
-    ctx.fill();
-  }
-  for (let i = 0; i < 26000; i++) {
-    const x = r() * 512, y = r() * 512;
-    ctx.strokeStyle = ['#d2bd7d38', '#355d3637', '#a7b87846', '#f0da9b24'][i % 4];
-    ctx.lineWidth = 0.5 + r() * 0.7;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + r() * 2 - 1, y - 1 - r() * 3);
-    ctx.stroke();
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(18, 18);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
   return texture;
@@ -515,17 +562,20 @@ function vegetation(scene, atmosphere) {
   addInstanced(trunks, trunkItems, () => 0x776449);
   trunks.castShadow = true;
   scene.add(trunks);
-  const palette = [0x61834e, 0x6e8d50, 0x7a9257, 0x54764b, 0x859554];
+  const palette = [0x61775b, 0x718266, 0x808b6b, 0x596e55, 0x8c9475];
   crowns.forEach((mesh, lobe) => {
     const items = simpleTreePositions.map(t => {
       const angle = t.kind * 8 + lobe * 2.094;
       const spread = lobe === 0 ? 0 : 1.28 * t.scale;
+      const slender = t.kind > 0.53;
       const radius = (lobe === 0 ? 3.2 : 2.65) * t.scale;
       return {
         x: t.x + Math.cos(angle) * spread,
         y: t.y + (lobe === 0 ? 7.5 : 6.7) * t.scale,
         z: t.z + Math.sin(angle) * spread,
-        sx: radius * between(0.9, 1.06), sy: radius * between(0.85, 1.07), sz: radius * between(0.9, 1.08),
+        sx: radius * (slender ? 0.77 : 1) * between(0.86, 1.1),
+        sy: radius * (slender ? 1.28 : 0.9) * between(0.85, 1.07),
+        sz: radius * (slender ? 0.8 : 1) * between(0.86, 1.11),
         rotation: random() * 6.28,
       };
     });
@@ -546,38 +596,70 @@ function vegetation(scene, atmosphere) {
     bushes.push({ x, y: heightAt(x, z) + s * 0.42, z, sx: s * 0.9, sy: s * 0.58, sz: s * 0.8, rotation: random() * 6.28 });
   }
   // A dense, trimmed hedgerow gives the cultivated field its clear boundary.
-  for (let x = FIELD.minX - 2; x < FIELD.maxX + 3; x += 2.7) {
+  for (let x = FIELD.minX - 2; x < FIELD.maxX + 3; x += between(2.15, 3.8)) {
     for (const z of [FIELD.minZ - 1.5, FIELD.maxZ + 1.5]) {
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.55, 0.55);
       if (z > FIELD.maxZ && sx > -50 && sx < -28) continue; // Machinery entrance from the yard.
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.76, z: sz, sx: between(1.55, 1.9), sy: between(0.88, 1.12), sz: between(1.55, 1.9), hedge: true });
+      if (random() < 0.065) continue;
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.74, z: sz,
+        sx: between(1.65, 2.55), sy: between(0.78, 1.24), sz: between(1.18, 1.82), hedge: true });
     }
   }
-  for (let z = FIELD.minZ; z < FIELD.maxZ; z += 2.7) {
+  for (let z = FIELD.minZ; z < FIELD.maxZ; z += between(2.15, 3.8)) {
     for (const x of [FIELD.minX - 1.5, FIELD.maxX + 1.5]) {
       if (x < 0 && z > 93 && z < 119) continue; // Gate near John's starting point.
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.45, 0.45);
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.76, z: sz, sx: between(1.55, 1.9), sy: between(0.88, 1.12), sz: between(1.55, 1.9), hedge: true });
+      if (random() < 0.065) continue;
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.74, z: sz,
+        sx: between(1.18, 1.82), sy: between(0.78, 1.24), sz: between(1.65, 2.55), hedge: true });
     }
   }
-  const bushGeometry = new THREE.IcosahedronGeometry(1, 2);
+  const bushGeometry = new THREE.SphereGeometry(1, 11, 8);
   const bushVertices = bushGeometry.attributes.position;
   for (let i = 0; i < bushVertices.count; i++) {
     const x = bushVertices.getX(i), y = bushVertices.getY(i), z = bushVertices.getZ(i);
-    const r = 0.92 + Math.sin(x * 13 + z * 7 + y * 11) * 0.08;
+    const r = 0.91 + Math.sin(x * 13 + z * 7 + y * 11) * 0.11 + Math.sin(x * 5 - z * 9) * 0.065;
     bushVertices.setXYZ(i, x * r, y * r, z * r);
   }
   bushGeometry.computeVertexNormals();
-  const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ color: 0xb8c9a9, roughness: 1, flatShading: false }), bushes.length);
+  const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: false }), bushes.length);
   atmosphere.registerFoliage(bushMesh.material);
   const detailedBushes = bushes.filter(bush => bush.hedge || Math.hypot(bush.x + 64, bush.z - 105) < 140);
   const detailedBushSet = new Set(detailedBushes);
-  addInstanced(bushMesh, bushes.map(bush => bush.hedge ? { ...bush, sx: bush.sx * 0.76, sy: bush.sy * 1.2, sz: bush.sz * 0.76 } :
+  addInstanced(bushMesh, bushes.map(bush => bush.hedge ? { ...bush, sx: bush.sx * 0.62, sy: bush.sy * 1.08, sz: bush.sz * 0.62 } :
     detailedBushSet.has(bush) ? { ...bush, sx: bush.sx * 0.4, sy: bush.sy * 0.45, sz: bush.sz * 0.4 } : bush),
-    (_, i) => [0x719050, 0x839b58, 0x5e804c, 0x8fa35c][i % 4]);
+    (_, i) => [0x7b9768, 0x90a17a, 0x708d65, 0x94a67c, 0x817e60][i % 5]);
+  const hedgeLobePositions = bushes.filter(bush => bush.hedge).map((bush, index) => {
+    const angle = index * 2.399;
+    return { x: bush.x + Math.cos(angle) * bush.sx * 0.36,
+      y: bush.y + bush.sy * 0.24,
+      z: bush.z + Math.sin(angle) * bush.sz * 0.36,
+      sx: bush.sx * between(0.46, 0.72), sy: bush.sy * between(0.65, 0.95), sz: bush.sz * between(0.46, 0.72),
+      rotation: angle };
+  });
+  const hedgeLobes = new THREE.InstancedMesh(bushGeometry, bushMesh.material, hedgeLobePositions.length);
+  addInstanced(hedgeLobes, hedgeLobePositions, (_, i) => [0x78946a, 0x96a67c, 0x81996f][i % 3]);
   bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * (bush.hedge ? 0.62 : detailedBushSet.has(bush) ? 0.28 : 0.66)));
-  bushMesh.castShadow = false;
-  scene.add(bushMesh);
+  bushMesh.castShadow = true;
+  hedgeLobes.castShadow = true;
+  scene.add(bushMesh, hedgeLobes);
+  const nearbyBushes = bushes.filter(bush => Math.hypot(bush.x, bush.z - 95) < 175);
+  const bushShadows = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, opacity: 0.19, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
+    nearbyBushes.length,
+  );
+  nearbyBushes.forEach((bush, index) => {
+    dummy.position.set(bush.x, heightAt(bush.x, bush.z) + 0.075, bush.z);
+    dummy.rotation.set(0, bush.rotation || 0, 0);
+    dummy.scale.set(bush.sx * 2.1, 1, bush.sz * 2.1);
+    dummy.updateMatrix();
+    bushShadows.setMatrixAt(index, dummy.matrix);
+  });
+  bushShadows.instanceMatrix.needsUpdate = true;
+  bushShadows.computeBoundingSphere();
+  bushShadows.renderOrder = 1;
+  scene.add(bushShadows);
   detailedHedges(scene, detailedBushes, atmosphere);
 
   const grass = [];
@@ -589,17 +671,23 @@ function vegetation(scene, atmosphere) {
     if (x > -95 && x < 95 && z > 180 && z < 252) continue;
     if (BUILDING_SITES.some(site => Math.abs(x - site.x) < site.width / 2 + 2 && Math.abs(z - site.z) < site.depth / 2 + 2)) continue;
     if (Math.abs(x - roadX(z)) < 10) continue;
-    const s = between(0.52, 1.22);
-    grass.push({ x, y: heightAt(x, z), z, sx: s, sy: s, sz: s, rotation: random() * 6.28 });
+    const profile = groundProfile(x, z);
+    const fieldEdge = x > FIELD.minX - 19 && x < FIELD.maxX + 19 && z > FIELD.minZ - 19 && z < FIELD.maxZ + 19;
+    const density = THREE.MathUtils.clamp(0.24 + profile.medium * 0.7 + (fieldEdge ? 0.18 : 0)
+      - profile.yard * 0.32 - profile.worn * 0.72, 0.04, 0.95);
+    if (random() > density) continue;
+    const s = between(0.48, 1.35);
+    const clipped = 1 - profile.yard * 0.53 - profile.worn * 0.5;
+    grass.push({ x, y: heightAt(x, z), z,
+      sx: s * between(0.72, 1.2), sy: s * clipped * (fieldEdge ? 1.32 : 1) * between(0.75, 1.25),
+      sz: s * between(0.72, 1.2), rotation: random() * 6.28, dry: profile.dry, damp: profile.damp });
   }
   const grassMesh = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xe4e9b8, roughness: 1, side: THREE.DoubleSide }), grass.length);
   atmosphere.registerFoliage(grassMesh.material);
-  const grassColors = [0x607e53, 0x78935d, 0x939a63, 0xaaa46b, 0x8c805c];
+  const grassColors = [0x708363, 0x839171, 0x999a77, 0xaaa281, 0x897e67];
   addInstanced(grassMesh, grass, item => {
-    const patch = 0.48 + Math.sin(item.x * 0.075 + item.z * 0.022) * Math.cos(item.z * 0.083) * 0.28
-      + Math.sin((item.x + item.z) * 0.19) * 0.1
-      + Math.max(0, 1 - Math.hypot(item.x - 21, item.z - 187) / 90) * 0.22;
-    return grassColors[Math.min(4, Math.floor(THREE.MathUtils.clamp(patch, 0, 0.999) * 5))];
+    const tone = THREE.MathUtils.clamp(item.dry * 0.83 + (item.damp > 0.7 ? -0.2 : 0.1), 0, 0.999);
+    return grassColors[Math.floor(tone * 5)];
   });
   scene.add(grassMesh);
   detailedRoadsideTrees(scene, obstacles, detailedTreePositions, atmosphere);
@@ -617,7 +705,7 @@ function detailedHedges(scene, bushes, atmosphere) {
     gltf.scene.traverse(child => { if (child.isMesh) variants.push(child); });
     if (!variants.length) return;
     const clusters = new Map();
-    const stemsPerBush = matchMedia('(pointer: coarse)').matches ? 1 : 2;
+    const stemsPerBush = matchMedia('(pointer: coarse)').matches ? 1 : 3;
     bushes.forEach((bush, index) => {
       if (stemsPerBush === 1 && bush.hedge && index % 2) return;
       const count = bush.hedge ? stemsPerBush : stemsPerBush * 2;
@@ -639,7 +727,7 @@ function detailedHedges(scene, bushes, atmosphere) {
       const material = variants[variant].material;
       material.side = THREE.DoubleSide;
       material.roughness = 1;
-      material.color.set(0x9cb381);
+      material.color.set(0xcbd0bf);
       atmosphere.registerFoliage(material);
       material.alphaMap = alphaMap;
       material.alphaTest = 0.45;
@@ -692,7 +780,10 @@ function detailedRoadsideTrees(scene, obstacles, woodlandTrees = [], atmosphere)
       source.traverse(child => {
         if (!child.isMesh) return;
         const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach(material => atmosphere.registerFoliage(material));
+        materials.forEach(material => {
+          if (material.name?.includes('body')) material.color.multiply(new THREE.Color(0xc9cbbb));
+          atmosphere.registerFoliage(material);
+        });
         const geometry = child.geometry.clone();
         geometry.applyMatrix4(child.matrixWorld);
         for (const sites of chunks.values()) {
@@ -1032,12 +1123,12 @@ function lightAndSky(scene, renderer) {
   sky.scale.setScalar(10000);
   sky.material.uniforms.turbidity.value = 4;
   sky.material.uniforms.rayleigh.value = 1.45;
-  sky.material.uniforms.mieCoefficient.value = 0.006;
-  sky.material.uniforms.mieDirectionalG.value = 0.86;
+  sky.material.uniforms.mieCoefficient.value = 0.004;
+  sky.material.uniforms.mieDirectionalG.value = 0.79;
   const sun = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.48, Math.PI * 0.28);
   sky.material.uniforms.sunPosition.value.copy(sun);
   scene.add(sky);
-  const hemisphere = new THREE.HemisphereLight(0xd8e6ef, 0x4d5544, 0.8);
+  const hemisphere = new THREE.HemisphereLight(0xc2d2df, 0x777a70, 0.82);
   scene.add(hemisphere);
   const fillLight = new THREE.DirectionalLight(0xd9e5ef, 0.2);
   fillLight.position.set(145, 95, 185);
@@ -1056,10 +1147,11 @@ function lightAndSky(scene, renderer) {
   sunlight.shadow.camera.far = 340;
   sunlight.shadow.bias = -0.0003;
   sunlight.shadow.normalBias = 0.02;
+  sunlight.shadow.radius = 2.5;
   sunlight.target.position.set(-10, 0, -15);
   scene.add(sunlight.target, sunlight);
   renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMappingExposure = 1.25;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;

@@ -38,23 +38,29 @@ export async function prewarmBuildingTextures(renderer) {
 function mapped(diffuse, normal, tint = 0xffffff, side = THREE.FrontSide) {
   const map = buildingTexture(diffuse, true);
   const normalMap = buildingTexture(normal, false);
-  return new THREE.MeshStandardMaterial({ map, normalMap, normalScale: new THREE.Vector2(0.48, 0.48), color: tint, roughness: 0.95, side });
+  return new THREE.MeshStandardMaterial({ map, normalMap, normalScale: new THREE.Vector2(0.36, 0.36), color: tint, roughness: 0.95, side });
 }
 
 const palette = {
-  stone: mapped(stoneDiff, stoneNormal, 0xe1d3b9),
-  paleStone: mapped(stoneDiff, stoneNormal, 0xfff5db),
+  stone: mapped(stoneDiff, stoneNormal, 0xe5dcc8),
+  paleStone: mapped(stoneDiff, stoneNormal, 0xf0eee5),
   barn: mapped(sidingDiff, sidingNormal),
-  darkWood: mapped(woodDiff, woodNormal, 0x84694c),
-  wood: mapped(woodDiff, woodNormal, 0xc6a17c),
-  plaster: mapped(plasterDiff, plasterNormal, 0xf2ead9),
-  slate: mapped(slateDiff, slateNormal, 0xb7bdbd, THREE.DoubleSide),
-  tile: mapped(tileDiff, tileNormal, 0xc4a891, THREE.DoubleSide),
-  concrete: mapped(concreteDiff, concreteNormal, 0xddd5c2),
-  floor: mapped(floorDiff, floorNormal, 0xb99a76),
+  darkWood: mapped(woodDiff, woodNormal, 0xab9482),
+  wood: mapped(woodDiff, woodNormal, 0xd0b79d),
+  plaster: mapped(plasterDiff, plasterNormal, 0xf1efe8),
+  slate: mapped(slateDiff, slateNormal, 0xc0c9cb, THREE.DoubleSide),
+  tile: mapped(tileDiff, tileNormal, 0xc9b6a0, THREE.DoubleSide),
+  concrete: mapped(concreteDiff, concreteNormal, 0xd4d4cd),
+  floor: mapped(floorDiff, floorNormal, 0xb3a493),
   glass: new THREE.MeshStandardMaterial({ color: 0x78939a, roughness: 0.23, metalness: 0.14, transparent: true, opacity: 0.72 }),
   cream: new THREE.MeshStandardMaterial({ color: 0xe6ddc6, roughness: 1 }),
   soil: new THREE.MeshStandardMaterial({ color: 0x726b55, roughness: 1 }),
+};
+palette.barn.emissive.set(0x536169);
+palette.barn.emissiveIntensity = 0.12;
+palette.barn.onBeforeCompile = shader => {
+  shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+    diffuseColor.rgb = min(vec3(1.0), diffuseColor.rgb * 1.38 + vec3(0.055, 0.065, 0.072));`);
 };
 palette.concrete.emissive.set(0xffffff);
 palette.concrete.emissiveMap = palette.concrete.map;
@@ -430,6 +436,7 @@ function building(scene, groundHeight, options) {
     triangle.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, w / 2.1, 0, w / 4.2, w * 0.29 / 2.1], 2));
     triangle.computeVertexNormals();
     const gableMaterial = material.clone();
+    if (kind === 'shed') gableMaterial.onBeforeCompile = material.onBeforeCompile;
     gableMaterial.side = THREE.DoubleSide;
     const gable = new THREE.Mesh(triangle, gableMaterial);
     gable.castShadow = true;
