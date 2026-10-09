@@ -53,10 +53,22 @@ export function createAtmosphere(scene, renderer, sky, sunlight, hemisphere, fil
   const sunEvening = new THREE.Color(0xffc18b);
   const moon = new THREE.Color(0xa1b7d3);
   const nightFill = new THREE.Color(0x8ca8c4);
+  const duskSkyFill = new THREE.Color(0xffd3a3);
+  const duskGroundFill = new THREE.Color(0x927d65);
+  const duskFog = new THREE.Color(0xb9a595);
+  const dayGroundFill = new THREE.Color(0x777b68);
+  const nightGroundFill = new THREE.Color(0x566575);
+  const dayFill = new THREE.Color(0xd9e5ef);
+  const duskFoliageTint = new THREE.Color(0x898b7e);
+  const foliage = new Map();
+  const foliageTint = new THREE.Color();
   const sunDirection = new THREE.Vector3();
   let lastWeather = '';
 
   return {
+    registerFoliage(material) {
+      if (material?.color && !foliage.has(material)) foliage.set(material, material.color.clone());
+    },
     update(farm, delta, subject) {
       const weather = weatherForDay(farm.day);
       const changed = weather.name !== lastWeather;
@@ -67,21 +79,26 @@ export function createAtmosphere(scene, renderer, sky, sunlight, hemisphere, fil
       const daylight = THREE.MathUtils.smoothstep(altitude, -0.15, 0.25);
       const warmth = 1 - THREE.MathUtils.smoothstep(altitude, 0.1, 0.58);
       const brightness = daylight * (1 - weather.cloud * 0.32);
+      const twilight = (1 - THREE.MathUtils.smoothstep(Math.abs(altitude), 0.02, 0.48)) * (1 - weather.cloud * 0.32);
       sunDirection.set(Math.cos(solarAngle) * 0.72, altitude, -0.55).normalize();
       sky.material.uniforms.sunPosition.value.copy(sunDirection);
       sunlight.target.position.set(subject.x, subject.y, subject.z);
       sunlight.position.copy(sunDirection).multiplyScalar(170).add(sunlight.target.position);
       sunlight.position.y = Math.max(subject.y + 24, sunlight.position.y);
       sunlight.target.updateMatrixWorld();
-      sunlight.color.copy(sunDay).lerp(sunEvening, warmth * daylight).lerp(moon, 1 - daylight);
-      sunlight.intensity = 0.38 + brightness * 2.01;
-      sunlight.shadow.intensity = 0.72 - weather.cloud * 0.27;
-      hemisphere.intensity = 0.55 + daylight * (0.28 + weather.cloud * 0.1);
-      hemisphere.color.setRGB(0.77, 0.84, 0.93).lerp(nightFill, 1 - daylight);
-      fillLight.intensity = 0.16 + brightness * 0.04;
-      renderer.toneMappingExposure = 1.4 - daylight * 0.23 + brightness * 0.04;
+      sunlight.color.copy(sunDay).lerp(sunEvening, warmth * daylight).lerp(moon, 1 - daylight).lerp(sunEvening, twilight * 0.78);
+      sunlight.intensity = 0.36 + brightness * 1.9 + twilight * 0.36;
+      sunlight.shadow.intensity = 0.44 - weather.cloud * 0.1 + daylight * 0.1;
+      hemisphere.intensity = 0.9 + daylight * 0.3 + twilight * 0.33;
+      hemisphere.color.set(0xdbe6e9).lerp(nightFill, 1 - daylight).lerp(duskSkyFill, twilight * 0.7);
+      hemisphere.groundColor.copy(dayGroundFill).lerp(nightGroundFill, 1 - daylight).lerp(duskGroundFill, twilight * 0.8);
+      fillLight.color.copy(dayFill).lerp(duskSkyFill, twilight * 0.65);
+      fillLight.intensity = 0.4 + brightness * 0.1 + twilight * 0.22;
+      renderer.toneMappingExposure = 1.5 - daylight * 0.26 + twilight * 0.12;
       scene.fog.density = weather.fog * (1 + (1 - daylight) * 0.12);
-      scene.fog.color.copy(nightFog).lerp(dayFog, daylight * (1 - weather.cloud * 0.22));
+      scene.fog.color.copy(nightFog).lerp(dayFog, daylight * (1 - weather.cloud * 0.22)).lerp(duskFog, twilight * 0.72);
+      foliageTint.setRGB(1, 1, 1).lerp(duskFoliageTint, twilight * 0.9);
+      for (const [material, original] of foliage) material.color.copy(original).multiply(foliageTint);
       if (changed) {
         sky.material.uniforms.turbidity.value = 2.4 + weather.cloud * 5.5;
         sky.material.uniforms.rayleigh.value = 2.1 - weather.cloud * 0.35;

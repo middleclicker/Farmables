@@ -34,10 +34,12 @@ try {
     group.rotation.y = coordinates[2] || 0;
   };
   const onFootCollides = (x, z) => world.collides(x, z) ||
+    Math.hypot(x - world.bicycle.group.position.x, z - world.bicycle.group.position.z) < 0.72 ||
     [world.vehicles.tractor, world.vehicles.combine].some(vehicle => vehicle.group.visible &&
       Math.hypot(x - vehicle.group.position.x, z - vehicle.group.position.z) < (vehicle === world.vehicles.combine ? 3.3 : 2.45));
   restoreVehicle(world.vehicles.tractor.group, farm.positions.tractor);
   restoreVehicle(world.vehicles.combine.group, farm.positions.combine);
+  restoreVehicle(world.bicycle.group, farm.positions.bicycle);
   world.fieldVisual.sync(farm);
   world.vehicles.sync(farm);
   john.group.position.set(farm.positions.john[0], world.heightAt(...farm.positions.john), farm.positions.john[1]);
@@ -91,7 +93,11 @@ try {
 
   function capturePositions() {
     const active = world.vehicles.activeGroup;
-    farm.positions.john = active ? [active.position.x + 4, active.position.z] : [john.group.position.x, john.group.position.z];
+    farm.positions.john = active ? [active.position.x + 4, active.position.z] :
+      world.bicycle.riding ? [world.bicycle.group.position.x + 1.2, world.bicycle.group.position.z] :
+      [john.group.position.x, john.group.position.z];
+    const bike = world.bicycle.group;
+    farm.positions.bicycle = [bike.position.x, bike.position.z, bike.rotation.y];
     for (const kind of ['tractor', 'combine']) {
       const group = world.vehicles[kind].group;
       farm.positions[kind] = [group.position.x, group.position.z, group.rotation.y];
@@ -157,10 +163,10 @@ try {
       farm.phase === 'clear' ? `${farm.accessCleared} / 2` :
       ['growing', 'spring_care'].includes(farm.phase) ? `${Math.max(0, farm.growthEvent + 1)} / 5` : '';
     $('#progress-fill').style.width = `${percent}%`;
-    $('#drive-hud').hidden = !world.vehicles.driven;
-    $('#sprint-toggle').hidden = !!world.vehicles.driven;
-    $('#vehicle-name').textContent = world.vehicles.driven === 'combine' ? 'COMBINE' : 'TRACTOR';
-    $('#drive-progress').textContent = farm.tool ? `${phaseLabel(farm)} · ${coveragePercent(farm)}%` : 'E · EXIT';
+    $('#drive-hud').hidden = !world.vehicles.driven && !world.bicycle.riding;
+    $('#sprint-toggle').hidden = !!world.vehicles.driven || world.bicycle.riding;
+    $('#vehicle-name').textContent = world.bicycle.riding ? 'BICYCLE' : world.vehicles.driven === 'combine' ? 'COMBINE' : 'TRACTOR';
+    $('#drive-progress').textContent = world.bicycle.riding ? 'E · DISMOUNT' : farm.tool ? `${phaseLabel(farm)} · ${coveragePercent(farm)}%` : 'E · EXIT';
   }
 
   function closePanel() {
@@ -318,11 +324,13 @@ try {
       $('#panel-title').textContent = 'Start a new farm?';
       addOption('Start again', 'Current local progress will be replaced.', () => {
         if (world.vehicles.driven) world.vehicles.exit(john.group.position);
+        if (world.bicycle.riding) world.bicycle.exit(world.collides);
         john.group.visible = true;
         Object.assign(farm, newFarm());
         john.group.position.set(-64, world.heightAt(-64, 105), 105);
         restoreVehicle(world.vehicles.tractor.group, farm.positions.tractor);
         restoreVehicle(world.vehicles.combine.group, farm.positions.combine);
+        restoreVehicle(world.bicycle.group, farm.positions.bicycle);
         closePanel();
         sync('A new farm begins.');
       });
@@ -344,6 +352,10 @@ try {
   }
 
   function nearbyAction() {
+    if (world.bicycle.riding) return { label: 'Dismount bicycle', run: () => {
+      john.group.position.copy(world.bicycle.exit(world.collides));
+      renderHud();
+    } };
     if (world.vehicles.driven) return { label: 'Exit vehicle', run: () => {
       world.vehicles.exit(john.group.position);
       lastSwath = null;
@@ -352,6 +364,8 @@ try {
       renderHud();
     } };
     const player = john.group.position;
+    if (Math.hypot(player.x - world.bicycle.group.position.x, player.z - world.bicycle.group.position.z) < 2.6)
+      return { label: 'Ride bicycle', run: () => { world.bicycle.enter(); renderHud(); } };
     if (Math.hypot(player.x + 55, player.z - 105) < 10) {
       if (farm.phase === 'clear') return { label: 'Cut brambles', run: () => perform(() => clearAccess(farm), farm.accessCleared === 1 ? 'Gate cleared. Soil is accessible.' : 'One patch cleared.') };
       if (farm.phase === 'test') return { label: 'Collect soil sample', run: () => perform(() => sampleSoil(farm), 'Sample collected. Take it to village supplies for laboratory testing.') };
@@ -589,6 +603,10 @@ try {
       context.fillStyle = '#d8bc69';
       context.beginPath(); context.arc(px(vehicle.group.position.x), pz(vehicle.group.position.z), 3.5, 0, Math.PI * 2); context.fill();
     }
+    if (!world.bicycle.riding) {
+      context.fillStyle = '#d7d0b3';
+      context.beginPath(); context.arc(px(world.bicycle.group.position.x), pz(world.bicycle.group.position.z), 2.4, 0, Math.PI * 2); context.fill();
+    }
     context.fillStyle = '#e5ddbf';
     for (const sheep of world.animals.mapPositions) {
       const x = px(sheep.x), y = pz(sheep.z);
@@ -608,7 +626,8 @@ try {
       context.beginPath(); context.arc(markerX, markerY, 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * farm.accessCleared); context.stroke();
     }
     context.save(); context.translate(px(subject.x), pz(subject.z));
-    context.rotate(mapArrowAngle(world.vehicles.driven ? world.vehicles.activeGroup.rotation.y : john.group.rotation.y));
+    context.rotate(mapArrowAngle(world.vehicles.driven ? world.vehicles.activeGroup.rotation.y :
+      world.bicycle.riding ? world.bicycle.group.rotation.y : john.group.rotation.y));
     context.fillStyle = '#fff3c6'; context.beginPath(); context.moveTo(0, -7); context.lineTo(5, 5); context.lineTo(-5, 5); context.closePath(); context.fill();
     context.restore();
   }
@@ -644,6 +663,23 @@ try {
         }
       }
       john.update(elapsed, 0);
+    } else if (world.bicycle.riding) {
+      const ride = world.bicycle.update(delta, {
+        forward: panelKind ? 0 : THREE.MathUtils.clamp(forwardInput, -1, 1),
+        right: panelKind ? 0 : THREE.MathUtils.clamp(rightInput, -1, 1),
+      }, world.collides);
+      john.group.position.copy(world.bicycle.group.position);
+      john.group.position.y += 0.18;
+      john.group.rotation.y = world.bicycle.group.rotation.y;
+      john.updateCycling(elapsed, ride.speed);
+      subject = world.bicycle.group.position;
+      distance = Math.max(cameraDistance, 11.5);
+      $('#vehicle-speed').textContent = `${Math.round(Math.abs(ride.speed) * 3.6)} km/h`;
+      if (performance.now() - lastCameraDrag > 2600) {
+        let difference = ride.heading - cameraYaw;
+        difference = Math.atan2(Math.sin(difference), Math.cos(difference));
+        cameraYaw += difference * Math.min(1, delta * 1.8);
+      }
     } else {
       const length = Math.hypot(forwardInput, rightInput);
       const moving = !panelKind && length > 0.05;

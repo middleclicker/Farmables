@@ -51,7 +51,7 @@ export function newFarm() {
     harvestCount: 0,
     lastYield: 0,
     neighborJobs: [],
-    positions: { john: [-64, 105], tractor: [-40, 181, 0], combine: [-55, 183, 0] },
+    positions: { john: [-64, 105], bicycle: [-64, 112, 0.14], tractor: [-40, 181, 0], combine: [-55, 183, 0] },
   };
 }
 
@@ -63,6 +63,8 @@ export function loadFarm(storage) {
     const farm = { ...newFarm(), ...stored, coverage: stored.coverage.map(Boolean) };
     if (!farm.positions || !['john', 'tractor', 'combine'].every(key =>
       Array.isArray(farm.positions[key]) && farm.positions[key].length >= 2 && farm.positions[key].every(Number.isFinite))) farm.positions = newFarm().positions;
+    if (!Array.isArray(farm.positions.bicycle) || farm.positions.bicycle.length < 2 || !farm.positions.bicycle.every(Number.isFinite))
+      farm.positions.bicycle = newFarm().positions.bicycle;
     if (!Array.isArray(farm.neighborJobs)) farm.neighborJobs = [];
     if (!Array.isArray(farm.documents)) farm.documents = [];
     if (stored.version === 1) {

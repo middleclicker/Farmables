@@ -17,6 +17,7 @@ import { FIELD_COLUMNS, FIELD_ROWS } from './farming.js';
 import { FIELD_BOUNDS, WORK_COLUMNS, WORK_ROWS, workBits, workedAt } from './fieldwork.js';
 import { BUILDING_SITES, createBuildings } from './buildings.js';
 import { createVehicles } from './vehicles.js';
+import { createBicycle } from './bicycle.js';
 import { createAtmosphere } from './weather.js';
 import { createAnimals } from './animals.js';
 import { headingFromMovement } from './navigation.js';
@@ -76,12 +77,31 @@ function terrain(scene) {
   const position = geometry.attributes.position;
   const colors = [];
   const base = new THREE.Color();
+  const green = new THREE.Color(0xb0c695);
+  const straw = new THREE.Color(0xd2bd83);
+  const worn = new THREE.Color(0xb6a184);
+  const noise = (x, z) => {
+    const ix = Math.floor(x), iz = Math.floor(z);
+    const fx = x - ix, fz = z - iz;
+    const smoothX = fx * fx * (3 - 2 * fx), smoothZ = fz * fz * (3 - 2 * fz);
+    const hash = (a, b) => {
+      const n = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+      return n - Math.floor(n);
+    };
+    return THREE.MathUtils.lerp(
+      THREE.MathUtils.lerp(hash(ix, iz), hash(ix + 1, iz), smoothX),
+      THREE.MathUtils.lerp(hash(ix, iz + 1), hash(ix + 1, iz + 1), smoothX), smoothZ);
+  };
   for (let i = 0; i < position.count; i++) {
     const x = position.getX(i), z = position.getZ(i);
     position.setY(i, heightAt(x, z));
-    const dry = Math.sin(x * 0.063) * Math.cos(z * 0.057) * 0.5 + 0.5;
-    const fleck = Math.sin(x * 0.47 + z * 0.34) * 0.03;
-    base.setRGB(0.82 + dry * 0.14 + fleck, 0.85 + dry * 0.13 + fleck, 0.79 + dry * 0.15 + fleck);
+    const broad = noise(x / 38, z / 38);
+    const patch = noise(x / 12, z / 12);
+    const dry = THREE.MathUtils.smoothstep(broad * 0.7 + patch * 0.3, 0.42, 0.7);
+    const yard = Math.max(0, 1 - Math.hypot(x - 21, z - 187) / 64);
+    const track = Math.max(0, 1 - Math.abs(x - roadX(z)) / 20) * 0.28;
+    base.copy(green).lerp(straw, dry * 0.75).lerp(worn, Math.max(yard * 0.48, track));
+    base.multiplyScalar(0.91 + patch * 0.15);
     colors.push(base.r, base.g, base.b);
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -90,7 +110,7 @@ function terrain(scene) {
     map: surfaceTexture(grassDiffuse, 110, 110, true),
     normalMap: surfaceTexture(grassNormal, 110, 110),
     normalScale: new THREE.Vector2(0.55, 0.55),
-    color: 0xa8d59b,
+    color: 0xf4f0dd,
     vertexColors: true,
     roughness: 1,
   }));
@@ -463,7 +483,7 @@ function colliderGrid(cellSize = 12) {
   };
 }
 
-function vegetation(scene) {
+function vegetation(scene, atmosphere) {
   const obstacles = colliderGrid();
   const treePositions = [];
   for (let i = 0; i < 2100 && treePositions.length < 480; i++) {
@@ -490,6 +510,7 @@ function vegetation(scene) {
     new THREE.MeshStandardMaterial({ color: 0xe0e8d0, roughness: 1 }),
     simpleTreePositions.length,
   ));
+  crowns.forEach(mesh => atmosphere.registerFoliage(mesh.material));
   const trunkItems = simpleTreePositions.map(t => ({ x: t.x, y: t.y + 3.1 * t.scale, z: t.z, sx: 0.9 * t.scale, sy: 6.2 * t.scale, sz: 0.9 * t.scale, rotation: random() * 6.28 }));
   addInstanced(trunks, trunkItems, () => 0x776449);
   trunks.castShadow = true;
@@ -529,14 +550,14 @@ function vegetation(scene) {
     for (const z of [FIELD.minZ - 1.5, FIELD.maxZ + 1.5]) {
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.55, 0.55);
       if (z > FIELD.maxZ && sx > -50 && sx < -28) continue; // Machinery entrance from the yard.
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.55, z: sz, sx: between(1.2, 1.55), sy: between(0.6, 0.85), sz: between(1.2, 1.55), hedge: true });
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.76, z: sz, sx: between(1.55, 1.9), sy: between(0.88, 1.12), sz: between(1.55, 1.9), hedge: true });
     }
   }
   for (let z = FIELD.minZ; z < FIELD.maxZ; z += 2.7) {
     for (const x of [FIELD.minX - 1.5, FIELD.maxX + 1.5]) {
       if (x < 0 && z > 93 && z < 119) continue; // Gate near John's starting point.
       const sx = x + between(-0.5, 0.5), sz = z + between(-0.45, 0.45);
-      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.55, z: sz, sx: between(1.2, 1.55), sy: between(0.6, 0.85), sz: between(1.2, 1.55), hedge: true });
+      bushes.push({ x: sx, y: heightAt(sx, sz) + 0.76, z: sz, sx: between(1.55, 1.9), sy: between(0.88, 1.12), sz: between(1.55, 1.9), hedge: true });
     }
   }
   const bushGeometry = new THREE.IcosahedronGeometry(1, 2);
@@ -548,14 +569,16 @@ function vegetation(scene) {
   }
   bushGeometry.computeVertexNormals();
   const bushMesh = new THREE.InstancedMesh(bushGeometry, new THREE.MeshStandardMaterial({ color: 0xb8c9a9, roughness: 1, flatShading: false }), bushes.length);
+  atmosphere.registerFoliage(bushMesh.material);
   const detailedBushes = bushes.filter(bush => bush.hedge || Math.hypot(bush.x + 64, bush.z - 105) < 140);
   const detailedBushSet = new Set(detailedBushes);
-  addInstanced(bushMesh, bushes.map(bush => detailedBushSet.has(bush) ? { ...bush, sx: bush.sx * 0.05, sy: bush.sy * 0.08, sz: bush.sz * 0.05 } : bush),
+  addInstanced(bushMesh, bushes.map(bush => bush.hedge ? { ...bush, sx: bush.sx * 0.76, sy: bush.sy * 1.2, sz: bush.sz * 0.76 } :
+    detailedBushSet.has(bush) ? { ...bush, sx: bush.sx * 0.4, sy: bush.sy * 0.45, sz: bush.sz * 0.4 } : bush),
     (_, i) => [0x719050, 0x839b58, 0x5e804c, 0x8fa35c][i % 4]);
-  bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * 0.66));
+  bushes.forEach(bush => obstacles.add(bush.x, bush.z, Math.min(bush.sx, bush.sz) * (bush.hedge ? 0.62 : detailedBushSet.has(bush) ? 0.28 : 0.66)));
   bushMesh.castShadow = false;
   scene.add(bushMesh);
-  detailedHedges(scene, detailedBushes);
+  detailedHedges(scene, detailedBushes, atmosphere);
 
   const grass = [];
   for (let i = 0; i < 26000; i++) {
@@ -570,14 +593,21 @@ function vegetation(scene) {
     grass.push({ x, y: heightAt(x, z), z, sx: s, sy: s, sz: s, rotation: random() * 6.28 });
   }
   const grassMesh = new THREE.InstancedMesh(grassTuftGeometry(), new THREE.MeshStandardMaterial({ color: 0xe4e9b8, roughness: 1, side: THREE.DoubleSide }), grass.length);
-  addInstanced(grassMesh, grass, (_, i) => [0x789455, 0x91a764, 0xa8ad70, 0x688c55, 0x9b9666][i % 5]);
+  atmosphere.registerFoliage(grassMesh.material);
+  const grassColors = [0x607e53, 0x78935d, 0x939a63, 0xaaa46b, 0x8c805c];
+  addInstanced(grassMesh, grass, item => {
+    const patch = 0.48 + Math.sin(item.x * 0.075 + item.z * 0.022) * Math.cos(item.z * 0.083) * 0.28
+      + Math.sin((item.x + item.z) * 0.19) * 0.1
+      + Math.max(0, 1 - Math.hypot(item.x - 21, item.z - 187) / 90) * 0.22;
+    return grassColors[Math.min(4, Math.floor(THREE.MathUtils.clamp(patch, 0, 0.999) * 5))];
+  });
   scene.add(grassMesh);
-  detailedRoadsideTrees(scene, obstacles, detailedTreePositions);
+  detailedRoadsideTrees(scene, obstacles, detailedTreePositions, atmosphere);
   obstacles.mapTrees = treePositions;
   return obstacles;
 }
 
-function detailedHedges(scene, bushes) {
+function detailedHedges(scene, bushes, atmosphere) {
   // Poly Haven's four low-poly shrub variants share one texture atlas. Cluster
   // them only on the field boundary; the rest of the countryside stays instanced.
   const alphaMap = textureLoader.load(`${import.meta.env.BASE_URL}models/shrub_03/textures/shrub_03_alpha_1k.png`);
@@ -610,6 +640,7 @@ function detailedHedges(scene, bushes) {
       material.side = THREE.DoubleSide;
       material.roughness = 1;
       material.color.set(0x9cb381);
+      atmosphere.registerFoliage(material);
       material.alphaMap = alphaMap;
       material.alphaTest = 0.45;
       material.needsUpdate = true;
@@ -629,7 +660,7 @@ function detailedHedges(scene, bushes) {
   }, undefined, cause => console.warn('Hedge detail model unavailable', cause));
 }
 
-function detailedRoadsideTrees(scene, obstacles, woodlandTrees = []) {
+function detailedRoadsideTrees(scene, obstacles, woodlandTrees = [], atmosphere) {
   const loader = new GLTFLoader();
   const locations = [
     [-166, 195], [-146, 115], [-180, 35], [-148, -46], [-184, -127],
@@ -660,6 +691,8 @@ function detailedRoadsideTrees(scene, obstacles, woodlandTrees = []) {
       // the textured tree models without a draw call for every single tree.
       source.traverse(child => {
         if (!child.isMesh) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach(material => atmosphere.registerFoliage(material));
         const geometry = child.geometry.clone();
         geometry.applyMatrix4(child.matrixWorld);
         for (const sites of chunks.values()) {
@@ -1038,12 +1071,13 @@ export function createWorld(scene, renderer) {
   terrain(scene);
   road(scene);
   const fieldVisual = field(scene);
-  const vegetationObstacles = vegetation(scene);
+  const vegetationObstacles = vegetation(scene, atmosphere);
   const village = town(scene, vegetationObstacles);
   const animals = createAnimals(scene, heightAt);
   farmDetails(scene, vegetationObstacles);
   const buildings = createBuildings(scene, heightAt);
   const vehicles = createVehicles(scene, heightAt);
+  const bicycle = createBicycle(scene, heightAt);
   const collides = (x, z, radius = 0.42) => buildings.collides(x, z, radius) || vegetationObstacles.collides(x, z, radius) || animals.collides(x, z, radius);
-  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, collides, atmosphere, village, animals, mapTrees: vegetationObstacles.mapTrees };
+  return { heightAt, roadX, field: FIELD, fieldVisual, buildings, vehicles, bicycle, collides, atmosphere, village, animals, mapTrees: vegetationObstacles.mapTrees };
 }

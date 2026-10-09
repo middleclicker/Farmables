@@ -67,6 +67,9 @@ export function createJohn(scene) {
   let walkWeight = 0;
   let runWeight = 0;
   let lastTime = 0;
+  const cycleBones = new Map();
+  const cycleAxis = new THREE.Vector3(1, 0, 0);
+  const cycleRotation = new THREE.Quaternion();
   const ready = new Promise(resolve => {
     new GLTFLoader().load(johnModelUrl, gltf => {
       const model = gltf.scene;
@@ -80,6 +83,7 @@ export function createJohn(scene) {
       model.position.y = -scaledBounds.min.y;
       model.rotation.y = Math.PI;
       model.traverse(object => {
+        if (object.isBone) cycleBones.set(object.name, object);
         if (object.isMesh) {
           object.castShadow = true;
           object.receiveShadow = true;
@@ -129,6 +133,25 @@ export function createJohn(scene) {
   return {
     group: john,
     ready,
+    updateCycling(time, speed) {
+      this.update(time, 0);
+      const pose = (name, angle) => cycleBones.get(name)?.quaternion.multiply(cycleRotation.setFromAxisAngle(cycleAxis, angle));
+      const cadence = Math.sin(time * Math.max(2.4, Math.abs(speed) * 1.25));
+      pose('LeftUpLeg', 1.12 + cadence * 0.22);
+      pose('RightUpLeg', 1.12 - cadence * 0.22);
+      pose('LeftLeg', -1.28 + cadence * 0.22);
+      pose('RightLeg', -1.28 - cadence * 0.22);
+      pose('LeftArm', 0.62);
+      pose('RightArm', 0.62);
+      pose('LeftForeArm', -0.48);
+      pose('RightForeArm', -0.48);
+      if (!mixer) {
+        leftLeg.rotation.x = 1.12 + cadence * 0.22;
+        rightLeg.rotation.x = 1.12 - cadence * 0.22;
+        leftArm.rotation.x = 0.62;
+        rightArm.rotation.x = 0.62;
+      }
+    },
     update(time, speed) {
       if (mixer) {
         const delta = Math.max(0, Math.min(time - lastTime, 0.06));

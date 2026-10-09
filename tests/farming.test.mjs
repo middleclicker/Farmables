@@ -91,8 +91,10 @@ test('work mask survives save and old cell saves migrate', () => {
   assert.equal(workedAt(restored, 10, 10), false);
   const old = newFarm();
   old.version = 1; old.coverage[5] = true;
+  delete old.positions.bicycle;
   const oldStorage = { getItem: () => JSON.stringify(old) };
   assert.ok(loadFarm(oldStorage).workCount > 0);
+  assert.deepEqual(loadFarm(oldStorage).positions.bicycle, newFarm().positions.bicycle);
 });
 
 test('equipment, jobs, weather and accelerated clock remain consistent', () => {
